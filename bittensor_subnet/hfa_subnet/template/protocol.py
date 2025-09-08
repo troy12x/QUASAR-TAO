@@ -62,7 +62,7 @@ class InfiniteContextSynapse(bt.Synapse):
     - memory_retention_score: Score measuring memory retention accuracy
     - processing_time: Time taken to process the request
     - context_length: Actual length of the context in tokens
-    - model_config: Configuration of the HFA model used
+    - hfa_model_config: Configuration of the HFA model used
     """
 
     # Required request inputs, filled by validator
@@ -80,7 +80,7 @@ class InfiniteContextSynapse(bt.Synapse):
     memory_retention_score: Optional[float] = None
     processing_time: Optional[float] = None
     context_length: Optional[int] = None
-    model_config: Optional[Dict[str, Any]] = None
+    hfa_model_config: Optional[Dict[str, Any]] = None
     
     # Performance metrics
     tokens_per_second: Optional[float] = None
@@ -91,6 +91,9 @@ class InfiniteContextSynapse(bt.Synapse):
     coherence_score: Optional[float] = None
     accuracy_score: Optional[float] = None
     position_understanding_score: Optional[float] = None
+    
+    # Model information
+    model_info: Optional[Dict[str, Any]] = None
 
     def deserialize(self) -> Dict[str, Any]:
         """
