@@ -386,6 +386,8 @@ class HFAValidator(BaseValidatorNeuron):
                 )
                 
                 if response and len(response) > 0:
+                    bt.logging.info(f"🔍 Debug - Raw response from miner {uid}: {type(response[0])}")
+                    bt.logging.info(f"🔍 Debug - Response content: {response[0]}")
                     responses[uid] = response[0]
                 else:
                     bt.logging.warning(f"No response from miner {uid}")
@@ -412,21 +414,27 @@ class HFAValidator(BaseValidatorNeuron):
                 # Calculate composite score based on HFA breakthrough capabilities
                 score_components = {}
                 
-                # Memory retention score (core HFA capability)
-                memory_score = getattr(response, 'memory_retention_score', 0.0)
+                # Handle both dict and synapse object responses
+                if isinstance(response, dict):
+                    memory_score = response.get('memory_retention_score', 0.0)
+                    position_score = response.get('position_understanding_score', 0.0)
+                    coherence_score = response.get('coherence_score', 0.0)
+                    tokens_per_sec = response.get('tokens_per_second', 0.0)
+                else:
+                    memory_score = getattr(response, 'memory_retention_score', 0.0)
+                    position_score = getattr(response, 'position_understanding_score', 0.0)
+                    coherence_score = getattr(response, 'coherence_score', 0.0)
+                    tokens_per_sec = getattr(response, 'tokens_per_second', 0.0)
+                
+                bt.logging.info(f"🔍 Debug - Miner {uid} response type: {type(response)}")
                 bt.logging.info(f"🔍 Debug - Miner {uid} memory_retention_score: {memory_score}")
+                
+                score_components = {}
                 score_components['memory_retention'] = memory_score * self.scoring_weights['memory_retention_score']
-                
-                # Position understanding score (224% improvement)
-                position_score = getattr(response, 'position_understanding_score', 0.0)
                 score_components['position_understanding'] = position_score * self.scoring_weights['position_understanding_score']
-                
-                # Coherence score (consistency over long sequences)
-                coherence_score = getattr(response, 'coherence_score', 0.0)
                 score_components['coherence'] = coherence_score * self.scoring_weights['coherence_score']
                 
                 # Performance efficiency
-                tokens_per_sec = getattr(response, 'tokens_per_second', 0.0)
                 efficiency_score = min(1.0, tokens_per_sec / 1000.0)  # Normalize to reasonable range
                 score_components['efficiency'] = efficiency_score * self.scoring_weights['tokens_per_second']
                 
