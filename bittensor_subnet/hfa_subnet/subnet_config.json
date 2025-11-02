@@ -1,7 +1,7 @@
 {
-  "subnet_name": "HFA Infinite Context",
-  "description": "Breakthrough infinite context processing with Hierarchical Flow Anchoring",
-  "version": "1.0.0",
+  "subnet_name": "Unified HFA-SimpleMind Infinite Context",
+  "description": "Unified subnet integrating HFA and SimpleMind architectures for infinite context processing",
+  "version": "2.0.0",
   "evaluation_cycle_seconds": 90,
   "max_miners_per_cycle": 16,
   "context_length_tests": [
@@ -12,10 +12,59 @@
     100000
   ],
   "scoring_weights": {
-    "memory_retention_score": 0.35,
-    "position_understanding_score": 0.25,
-    "coherence_score": 0.2,
-    "tokens_per_second": 0.1,
-    "scaling_efficiency": 0.1
+    "task_quality": 0.8,
+    "consistency_under_perturbation": 0.1,
+    "efficiency_proxy": 0.1
+  },
+  "detailed_scoring_weights": {
+    "memory_retention_score": 0.25,
+    "position_understanding_score": 0.20,
+    "coherence_score": 0.15,
+    "factual_accuracy_score": 0.20,
+    "tokens_per_second": 0.05,
+    "scaling_efficiency": 0.05,
+    "diversity_bonus": 0.10
+  },
+  "architecture_support": {
+    "enabled_architectures": ["hfa", "simplemind", "hybrid", "standard"],
+    "architecture_diversity_bonus": 0.05,
+    "novel_architecture_bonus": 0.02,
+    "baseline_comparison_required": true
+  },
+  "benchmark_evaluation": {
+    "enabled_benchmarks": ["longbench", "hotpotqa_distractor", "govreport", "needle_in_haystack"],
+    "synthetic_fallback": true,
+    "benchmark_rotation_schedule": "round_robin",
+    "context_length_scaling": {
+      "min_length": 1000,
+      "max_length": 100000,
+      "scaling_steps": [1000, 5000, 15000, 32000, 50000, 100000]
+    }
+  },
+  "perturbation_testing": {
+    "enabled": true,
+    "perturbation_types": ["paraphrase", "reorder", "noise_injection"],
+    "consistency_threshold": 0.85,
+    "perturbation_frequency": 0.2,
+    "max_perturbations_per_cycle": 2,
+    "perturbation_timeout_seconds": 30
+  },
+  "diversity_incentives": {
+    "cosine_similarity_threshold": 0.95,
+    "diversity_penalty_factor": 0.1,
+    "monoculture_detection": true,
+    "baseline_models": ["gpt2", "llama2-7b"]
+  },
+  "audit_and_transparency": {
+    "logit_hash_computation": true,
+    "audit_trail_retention_days": 30,
+    "consensus_validation": true,
+    "deterministic_scoring": true
+  },
+  "performance_monitoring": {
+    "memory_usage_tracking": true,
+    "latency_monitoring": true,
+    "throughput_measurement": true,
+    "hardware_profiling": true
   }
 }

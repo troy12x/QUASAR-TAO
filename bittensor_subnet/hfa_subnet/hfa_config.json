@@ -1,5 +1,5 @@
 {
-  "model_name": "hfa_infinite_context",
+  "model_name": "unified_infinite_context",
   "max_context_length": 100000,
   "memory_retention_target": 1.0,
   "position_understanding_boost": 2.24,
@@ -11,5 +11,75 @@
     "coherence_score",
     "tokens_per_second",
     "scaling_efficiency"
-  ]
+  ],
+  "supported_architectures": {
+    "hfa": {
+      "enabled": true,
+      "default_config": {
+        "vocab_size": 50257,
+        "d_model": 512,
+        "num_layers": 6,
+        "num_heads": 8,
+        "d_ff": 2048,
+        "max_seq_len": 100000,
+        "dropout": 0.1
+      }
+    },
+    "simplemind": {
+      "enabled": true,
+      "default_config": {
+        "vocab_size": 50257,
+        "d_model": 512,
+        "num_layers": 6,
+        "num_channels": 64,
+        "router_type": "dynamic",
+        "aggregation_type": "learnable",
+        "max_seq_len": 100000,
+        "dropout": 0.1
+      }
+    },
+    "hybrid": {
+      "enabled": true,
+      "default_config": {
+        "vocab_size": 50257,
+        "d_model": 512,
+        "max_seq_len": 100000,
+        "dropout": 0.1,
+        "mixing_strategy": "alternating",
+        "hfa_config": {
+          "num_layers": 3,
+          "num_heads": 8,
+          "d_ff": 2048
+        },
+        "simplemind_config": {
+          "num_layers": 3,
+          "num_channels": 64,
+          "router_type": "dynamic",
+          "aggregation_type": "learnable"
+        }
+      }
+    },
+    "standard": {
+      "enabled": true,
+      "default_config": {
+        "vocab_size": 50257,
+        "d_model": 512,
+        "num_layers": 6,
+        "num_heads": 8,
+        "d_ff": 2048,
+        "max_seq_len": 100000,
+        "dropout": 0.1
+      }
+    }
+  },
+  "model_selection": {
+    "default_architecture": "hfa",
+    "architecture_preference_order": ["hfa", "simplemind", "hybrid", "standard"],
+    "task_based_selection": {
+      "long_context": ["hfa", "simplemind"],
+      "short_context": ["standard", "hfa"],
+      "memory_intensive": ["hfa", "hybrid"],
+      "speed_critical": ["simplemind", "standard"]
+    }
+  }
 }

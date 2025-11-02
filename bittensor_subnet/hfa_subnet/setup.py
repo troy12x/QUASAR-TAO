@@ -62,6 +62,27 @@ with codecs.open(
     )
     version_string = version_match.group(1)
 
+# Validate configuration files during setup
+def validate_configurations():
+    """Validate subnet configuration files during setup."""
+    try:
+        # Import here to avoid circular imports during setup
+        from template.utils.config_validator import ConfigValidator
+        
+        # Validate configurations in the current directory
+        config_dir = here
+        ConfigValidator.validate_all_configs(config_dir)
+        print("✓ Configuration validation passed")
+        
+    except ImportError:
+        print("⚠ Configuration validation skipped (validator not available)")
+    except Exception as e:
+        print(f"⚠ Configuration validation warning: {e}")
+        # Don't fail setup on config validation errors, just warn
+
+# Run configuration validation
+validate_configurations()
+
 setup(
     name="bittensor_subnet_template",  # TODO(developer): Change this value to your module subnet name.
     version=version_string,

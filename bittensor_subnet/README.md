@@ -34,18 +34,6 @@ Based on research showing HFA achieves:
 - **Position Independence**: Superior understanding without positional embeddings
 - **Temporal Evolution**: Continuous flow with discrete checkpoint anchoring
 
-### 🚀 Getting Started
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Register as miner
-python neurons/miner.py --netuid <NETUID> --wallet.name <WALLET> --wallet.hotkey <HOTKEY>
-
-# Register as validator  
-python neurons/validator.py --netuid <NETUID> --wallet.name <WALLET> --wallet.hotkey <HOTKEY>
-```
 
 ### 🏆 Competitive Advantages
 

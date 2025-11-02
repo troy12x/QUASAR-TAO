@@ -21,6 +21,7 @@ import subprocess
 import argparse
 import bittensor as bt
 from .logging import setup_events_logger
+from .config_validator import ConfigValidator
 
 
 def is_cuda_available():
@@ -65,6 +66,39 @@ def check_config(cls, config: "bt.Config"):
             config.neuron.full_path, config.neuron.events_retention_size
         )
         bt.logging.register_primary_logger(events_logger.name)
+    
+    # Validate subnet configuration files
+    validate_subnet_configs(config)
+
+
+def validate_subnet_configs(config: "bt.Config"):
+    """
+    Validate subnet configuration files.
+    
+    Args:
+        config: Bittensor configuration object
+    """
+    try:
+        # Get the directory containing configuration files
+        config_dir = os.path.dirname(os.path.abspath(__file__))
+        config_dir = os.path.join(config_dir, '..', '..')  # Go up to subnet root
+        config_dir = os.path.abspath(config_dir)
+        
+        # Validate all configuration files
+        validated_configs = ConfigValidator.validate_all_configs(config_dir)
+        
+        # Store validated configs in the config object for later use
+        if not hasattr(config, 'subnet'):
+            config.subnet = type('SubnetConfig', (), {})()
+        
+        config.subnet.hfa_config = validated_configs.get('hfa', {})
+        config.subnet.subnet_config = validated_configs.get('subnet', {})
+        
+        bt.logging.info("Subnet configuration validation completed successfully")
+        
+    except Exception as e:
+        bt.logging.warning(f"Configuration validation failed: {e}")
+        # Don't fail startup on config validation errors, just warn
 
 
 def add_args(cls, parser):
@@ -130,6 +164,60 @@ def add_args(cls, parser):
         default="",
     )
 
+    # Architecture-specific configuration arguments
+    parser.add_argument(
+        "--neuron.model_architecture",
+        type=str,
+        help="Model architecture to use (hfa, simplemind, hybrid, standard)",
+        default="hfa",
+        choices=["hfa", "simplemind", "hybrid", "standard"]
+    )
+
+    parser.add_argument(
+        "--neuron.architecture_config_override",
+        type=str,
+        help="JSON string to override default architecture configuration",
+        default=None
+    )
+
+    parser.add_argument(
+        "--neuron.enable_architecture_switching",
+        action="store_true",
+        help="Enable dynamic architecture switching based on task requirements",
+        default=False
+    )
+
+    parser.add_argument(
+        "--neuron.hybrid_mixing_strategy",
+        type=str,
+        help="Mixing strategy for hybrid models (alternating, parallel, sequential)",
+        default="alternating",
+        choices=["alternating", "parallel", "sequential"]
+    )
+
+    parser.add_argument(
+        "--neuron.max_context_length",
+        type=int,
+        help="Maximum context length to support",
+        default=100000
+    )
+
+    parser.add_argument(
+        "--neuron.enable_benchmark_evaluation",
+        action="store_true",
+        help="Enable real-world benchmark evaluation",
+        default=True
+    )
+
+    parser.add_argument(
+        "--neuron.benchmark_types",
+        type=str,
+        nargs="+",
+        help="Types of benchmarks to enable",
+        default=["longbench", "hotpotqa_distractor", "govreport", "needle_in_haystack"],
+        choices=["longbench", "hotpotqa_distractor", "govreport", "needle_in_haystack"]
+    )
+
 
 def add_miner_args(cls, parser):
     """Add miner specific arguments to the parser."""
@@ -167,6 +255,36 @@ def add_miner_args(cls, parser):
         type=str,
         default="opentensor-dev",
         help="Wandb entity to log to.",
+    )
+
+    # Miner-specific architecture arguments
+    parser.add_argument(
+        "--miner.preferred_architecture",
+        type=str,
+        help="Preferred model architecture for this miner",
+        default=None,
+        choices=["hfa", "simplemind", "hybrid", "standard"]
+    )
+
+    parser.add_argument(
+        "--miner.enable_model_switching",
+        action="store_true",
+        help="Enable switching between different model architectures based on task",
+        default=False
+    )
+
+    parser.add_argument(
+        "--miner.model_checkpoint_path",
+        type=str,
+        help="Path to model checkpoint file",
+        default=None
+    )
+
+    parser.add_argument(
+        "--miner.performance_tracking",
+        action="store_true",
+        help="Enable detailed performance tracking and logging",
+        default=True
     )
 
 
@@ -244,6 +362,50 @@ def add_validator_args(cls, parser):
         type=str,
         help="The name of the project where you are sending the new run.",
         default="opentensor-dev",
+    )
+
+    # Validator-specific architecture arguments
+    parser.add_argument(
+        "--validator.enable_architecture_diversity_tracking",
+        action="store_true",
+        help="Enable tracking of architecture diversity among miners",
+        default=True
+    )
+
+    parser.add_argument(
+        "--validator.perturbation_testing_frequency",
+        type=float,
+        help="Frequency of perturbation testing (0.0 to 1.0)",
+        default=0.2
+    )
+
+    parser.add_argument(
+        "--validator.consensus_threshold",
+        type=float,
+        help="Threshold for consensus validation",
+        default=0.9
+    )
+
+    parser.add_argument(
+        "--validator.enable_audit_logging",
+        action="store_true",
+        help="Enable comprehensive audit logging",
+        default=True
+    )
+
+    parser.add_argument(
+        "--validator.benchmark_rotation_schedule",
+        type=str,
+        help="Schedule for rotating between different benchmarks",
+        default="round_robin",
+        choices=["round_robin", "random", "weighted"]
+    )
+
+    parser.add_argument(
+        "--validator.diversity_bonus_weight",
+        type=float,
+        help="Weight for diversity bonus in scoring",
+        default=0.1
     )
 
 
