@@ -469,7 +469,7 @@ class TestEndToEndIntegration:
             evaluation_type="memory_retention",
             max_tokens=100,
             architecture_type="hfa",
-            model_config={"max_context_length": 4096}
+            model_configuration={"max_context_length": 4096}
         )
         
         assert test_synapse.context == "Test context for protocol communication"

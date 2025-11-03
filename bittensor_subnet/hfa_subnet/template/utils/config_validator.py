@@ -72,7 +72,7 @@ class ConfigValidator:
         
         # Validate required top-level fields
         required_fields = [
-            'model_name', 'max_context_length', 'supported_architectures',
+            'model_name', 'max_context_length', 'architectures',
             'model_selection', 'evaluation_metrics'
         ]
         
@@ -81,7 +81,7 @@ class ConfigValidator:
                 raise ValueError(f"Missing required field in HFA config: {field}")
         
         # Validate supported architectures
-        cls._validate_supported_architectures(config['supported_architectures'])
+        cls._validate_architectures(config['architectures'])
         
         # Validate model selection configuration
         cls._validate_model_selection(config['model_selection'])
@@ -167,7 +167,7 @@ class ConfigValidator:
         return config
     
     @classmethod
-    def _validate_supported_architectures(cls, architectures_config: Dict[str, Any]):
+    def _validate_architectures(cls, architectures_config: Dict[str, Any]):
         """Validate supported architectures configuration."""
         for arch_name, arch_config in architectures_config.items():
             if arch_name not in cls.SUPPORTED_ARCHITECTURES:
@@ -222,9 +222,18 @@ class ConfigValidator:
             if config['mixing_strategy'] not in cls.SUPPORTED_MIXING_STRATEGIES:
                 raise ValueError(f"Unsupported mixing_strategy: {config['mixing_strategy']}")
             
-            # Recursively validate sub-configs
-            cls._validate_architecture_default_config('hfa', config['hfa_config'])
-            cls._validate_architecture_default_config('simplemind', config['simplemind_config'])
+            # Validate sub-configs (these don't need vocab_size as they're nested)
+            hfa_subconfig = config['hfa_config']
+            hfa_required = ['num_layers', 'num_heads', 'd_ff']
+            for field in hfa_required:
+                if field not in hfa_subconfig:
+                    raise ValueError(f"Missing HFA field '{field}' in hybrid hfa_config")
+            
+            simplemind_subconfig = config['simplemind_config']
+            simplemind_required = ['num_layers', 'num_channels', 'router_type', 'aggregation_type']
+            for field in simplemind_required:
+                if field not in simplemind_subconfig:
+                    raise ValueError(f"Missing SimpleMind field '{field}' in hybrid simplemind_config")
         
         elif arch_name == 'standard':
             standard_fields = ['num_layers', 'num_heads', 'd_ff']
@@ -394,13 +403,13 @@ class ConfigValidator:
         if architecture_type not in cls.SUPPORTED_ARCHITECTURES:
             raise ValueError(f"Unsupported architecture type: {architecture_type}")
         
-        if 'supported_architectures' not in hfa_config:
-            raise ValueError("HFA config missing supported_architectures section")
+        if 'architectures' not in hfa_config:
+            raise ValueError("HFA config missing architectures section")
         
-        if architecture_type not in hfa_config['supported_architectures']:
+        if architecture_type not in hfa_config['architectures']:
             raise ValueError(f"Architecture {architecture_type} not configured in HFA config")
         
-        arch_config = hfa_config['supported_architectures'][architecture_type]
+        arch_config = hfa_config['architectures'][architecture_type]
         
         if not arch_config.get('enabled', False):
             raise ValueError(f"Architecture {architecture_type} is not enabled")

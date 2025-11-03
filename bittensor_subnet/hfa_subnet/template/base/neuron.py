@@ -76,10 +76,13 @@ class BaseNeuron(ABC):
 
         # Build Bittensor objects
         # These are core Bittensor classes to interact with the network.
-        bt.logging.info("Setting up bittensor objects.")
+        bt.logging.info("=" * 80)
+        bt.logging.info("🔧 Setting up bittensor objects...")
+        bt.logging.info("=" * 80)
 
         # The wallet holds the cryptographic key pairs for the miner.
         if self.config.mock:
+            bt.logging.info("📝 Using mock wallet and subtensor...")
             self.wallet = bt.MockWallet(config=self.config)
             self.subtensor = MockSubtensor(
                 self.config.netuid, wallet=self.wallet
@@ -88,13 +91,27 @@ class BaseNeuron(ABC):
                 self.config.netuid, subtensor=self.subtensor
             )
         else:
+            bt.logging.info("💼 Creating wallet...")
             self.wallet = bt.wallet(config=self.config)
+            bt.logging.info(f"✅ Wallet created: {self.wallet}")
+            
+            bt.logging.info(f"🌐 Connecting to subtensor (network: {self.config.subtensor.network})...")
+            bt.logging.info("   This may take 10-30 seconds...")
+            import time
+            start = time.time()
             self.subtensor = bt.subtensor(config=self.config)
+            bt.logging.info(f"✅ Subtensor connected in {time.time() - start:.2f}s: {self.subtensor}")
+            
+            bt.logging.info(f"📊 Downloading metagraph for netuid {self.config.netuid}...")
+            bt.logging.info("   This may take 30-60 seconds on first run...")
+            start = time.time()
             self.metagraph = self.subtensor.metagraph(self.config.netuid)
+            bt.logging.info(f"✅ Metagraph downloaded in {time.time() - start:.2f}s")
+            bt.logging.info(f"   Metagraph has {len(self.metagraph.hotkeys)} neurons")
 
-        bt.logging.info(f"Wallet: {self.wallet}")
-        bt.logging.info(f"Subtensor: {self.subtensor}")
-        bt.logging.info(f"Metagraph: {self.metagraph}")
+        bt.logging.info(f"📋 Wallet: {self.wallet}")
+        bt.logging.info(f"📋 Subtensor: {self.subtensor}")
+        bt.logging.info(f"📋 Metagraph: {self.metagraph}")
 
         # Check if the miner is registered on the Bittensor network before proceeding further.
         self.check_registered()
@@ -134,15 +151,21 @@ class BaseNeuron(ABC):
 
     def check_registered(self):
         # --- Check for registration.
+        bt.logging.info("🔍 Checking if hotkey is registered on network...")
+        bt.logging.info(f"   Hotkey: {self.wallet.hotkey.ss58_address}")
+        bt.logging.info(f"   Netuid: {self.config.netuid}")
+        
         if not self.subtensor.is_hotkey_registered(
             netuid=self.config.netuid,
             hotkey_ss58=self.wallet.hotkey.ss58_address,
         ):
             bt.logging.error(
-                f"Wallet: {self.wallet} is not registered on netuid {self.config.netuid}."
+                f"❌ Wallet: {self.wallet} is not registered on netuid {self.config.netuid}."
                 f" Please register the hotkey using `btcli subnets register` before trying again"
             )
             exit()
+        
+        bt.logging.info("✅ Hotkey is registered on network")
 
     def should_sync_metagraph(self):
         """

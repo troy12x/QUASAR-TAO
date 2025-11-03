@@ -45,6 +45,8 @@ def get_config():
                        help="Model name/path")
     parser.add_argument("--model.max_context_length", type=int, default=32768,
                        help="Maximum context length")
+    parser.add_argument("--model.skip_loading", action="store_true",
+                       help="Skip model loading for testing (uses mock responses)")
     
     # Performance settings
     parser.add_argument("--performance.batch_size", type=int, default=1,

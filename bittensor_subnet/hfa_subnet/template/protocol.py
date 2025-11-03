@@ -188,7 +188,7 @@ class InfiniteContextSynapse(bt.Synapse):
     
     # Architecture support fields (unified architecture support)
     architecture_type: Optional[str] = None  # "hfa", "simplemind", "hybrid", "standard"
-    model_config: Optional[Dict[str, Any]] = None  # Architecture-specific configuration
+    model_configuration: Optional[Dict[str, Any]] = None  # Architecture-specific configuration
     architecture_preference: Optional[str] = None  # Preferred architecture for this task
     
     # Architecture-specific performance metrics
@@ -268,7 +268,7 @@ class InfiniteContextSynapse(bt.Synapse):
             "model_info": self.model_info,
             # Architecture support information
             "architecture_type": self.architecture_type,
-            "model_config": self.model_config,
+            "model_configuration": self.model_configuration,
             "architecture_preference": self.architecture_preference,
             "hfa_checkpoint_count": self.hfa_checkpoint_count,
             "simplemind_block_count": self.simplemind_block_count,
@@ -439,8 +439,8 @@ class InfiniteContextSynapse(bt.Synapse):
             return False
         
         # Validate architecture-specific configuration
-        if self.model_config:
-            if self.architecture_type == "hybrid" and "components" not in self.model_config:
+        if self.model_configuration:
+            if self.architecture_type == "hybrid" and "components" not in self.model_configuration:
                 return False
         
         return True
@@ -655,7 +655,7 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
     
     # Model information (enhanced)
     model_architecture: Optional[str] = None  # "hfa", "simplemind", "hybrid", "standard"
-    model_config: Optional[Dict[str, Any]] = None
+    model_configuration: Optional[Dict[str, Any]] = None
     model_signature: Optional[str] = None  # For audit trails
     
     # Audit and hash fields for sealed scoring harness
@@ -750,7 +750,7 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
             
             # Model information (enhanced)
             "model_architecture": self.model_architecture,
-            "model_config": self.model_config,
+            "model_configuration": self.model_configuration,
             "model_signature": self.model_signature,
             
             # Audit and hash information

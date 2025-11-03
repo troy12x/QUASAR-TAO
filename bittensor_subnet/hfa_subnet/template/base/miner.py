@@ -42,9 +42,16 @@ class BaseMinerNeuron(BaseNeuron):
         add_miner_args(cls, parser)
 
     def __init__(self, config=None):
+        bt.logging.info("=" * 80)
+        bt.logging.info("🏗️ Initializing BaseMinerNeuron...")
+        bt.logging.info("=" * 80)
+        
+        bt.logging.info("📞 Calling BaseNeuron.__init__...")
         super().__init__(config=config)
+        bt.logging.info("✅ BaseNeuron.__init__ completed")
 
         # Warn if allowing incoming requests from anyone.
+        bt.logging.info("⚙️ Checking security settings...")
         if not self.config.blacklist.force_validator_permit:
             bt.logging.warning(
                 "You are allowing non-validators to send requests to your miner. This is a security risk."
@@ -53,20 +60,23 @@ class BaseMinerNeuron(BaseNeuron):
             bt.logging.warning(
                 "You are allowing non-registered entities to send requests to your miner. This is a security risk."
             )
+        
         # The axon handles request processing, allowing validators to send this miner requests.
+        bt.logging.info("🔌 Creating axon for handling requests...")
         self.axon = bt.axon(
             wallet=self.wallet,
             config=self.config() if callable(self.config) else self.config,
         )
+        bt.logging.info("✅ Axon created")
 
         # Attach determiners which functions are called when servicing a request.
-        bt.logging.info(f"Attaching forward function to miner axon.")
+        bt.logging.info(f"🔗 Attaching forward function to miner axon...")
         self.axon.attach(
             forward_fn=self.forward,
             blacklist_fn=self.blacklist,
             priority_fn=self.priority,
         )
-        bt.logging.info(f"Axon created: {self.axon}")
+        bt.logging.info(f"✅ Axon configured: {self.axon}")
 
         # Instantiate runners
         self.should_exit: bool = False

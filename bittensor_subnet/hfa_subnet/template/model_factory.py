@@ -67,18 +67,42 @@ class ModelArchitectureFactory:
     def _lazy_load_models(cls):
         """Lazy load model classes to avoid circular imports."""
         if not cls._model_registry:
-            from .models.hfa_model import HFAModel
-            from .models.simplemind_model import SimpleMindModel
-            from .models.hybrid_model import HybridModel
-            from .models.standard_model import StandardTransformerModel
+            bt.logging.info("[ModelFactory] 🔄 Loading model classes...")
             
-            cls._model_registry.update({
-                'hfa': HFAModel,
-                'simplemind': SimpleMindModel,
-                'hybrid': HybridModel,
-                'standard': StandardTransformerModel,
-                'transformer': StandardTransformerModel,  # Alias
-            })
+            # Load each model with error handling
+            models_to_load = [
+                ('hfa', '.models.hfa_model', 'HFAModel'),
+                ('simplemind', '.models.simplemind_model', 'SimpleMindModel'),
+                ('hybrid', '.models.hybrid_model', 'HybridModel'),
+                ('standard', '.models.standard_model', 'StandardTransformerModel'),
+            ]
+            
+            import time
+            for arch_name, module_name, class_name in models_to_load:
+                try:
+                    bt.logging.info(f"[ModelFactory]   Importing {arch_name} from {module_name}...")
+                    start = time.time()
+                    module = __import__(f'template{module_name}', fromlist=[class_name])
+                    bt.logging.info(f"[ModelFactory]   Module imported in {time.time() - start:.2f}s")
+                    
+                    bt.logging.info(f"[ModelFactory]   Getting class {class_name}...")
+                    model_class = getattr(module, class_name)
+                    cls._model_registry[arch_name] = model_class
+                    bt.logging.info(f"[ModelFactory]   ✅ Loaded {arch_name} model class")
+                except Exception as e:
+                    bt.logging.warning(f"[ModelFactory]   ⚠️ Failed to load {arch_name} model: {e}")
+                    import traceback
+                    bt.logging.debug(f"[ModelFactory]   Traceback: {traceback.format_exc()}")
+                    continue
+            
+            # Add alias
+            if 'standard' in cls._model_registry:
+                cls._model_registry['transformer'] = cls._model_registry['standard']
+                bt.logging.info(f"[ModelFactory]   Added 'transformer' alias for 'standard'")
+            
+            bt.logging.info(f"[ModelFactory] ✅ Loaded {len(cls._model_registry)} model architectures: {list(cls._model_registry.keys())}")
+        else:
+            bt.logging.info(f"[ModelFactory] Model registry already loaded with {len(cls._model_registry)} architectures")
     
     @classmethod
     def create_model(cls, architecture_type: str, config: Dict[str, Any]) -> BaseModel:
@@ -96,10 +120,13 @@ class ModelArchitectureFactory:
             ValueError: If architecture_type is not supported
             Exception: If model creation fails
         """
+        bt.logging.info(f"[ModelFactory] create_model called for: {architecture_type}")
         architecture_type = architecture_type.lower()
         
         # Lazy load models if not already loaded
+        bt.logging.info(f"[ModelFactory] Lazy loading model classes...")
         cls._lazy_load_models()
+        bt.logging.info(f"[ModelFactory] Model registry has {len(cls._model_registry)} entries")
         
         if architecture_type not in cls._model_registry:
             available = ', '.join(cls._model_registry.keys())
@@ -110,24 +137,36 @@ class ModelArchitectureFactory:
         
         try:
             # Validate configuration before creating model
+            bt.logging.info(f"[ModelFactory] Validating config for {architecture_type}...")
             cls.validate_config(architecture_type, config)
+            bt.logging.info(f"[ModelFactory] Config validated successfully")
             
             # Add architecture type to config
             config = config.copy()
             config['architecture_type'] = architecture_type
             
             # Create model instance
+            bt.logging.info(f"[ModelFactory] Getting model class for {architecture_type}...")
             model_class = cls._model_registry[architecture_type]
-            model = model_class(config)
+            bt.logging.info(f"[ModelFactory] Model class: {model_class.__name__}")
             
+            bt.logging.info(f"[ModelFactory] Instantiating {architecture_type} model...")
+            import time
+            start = time.time()
+            model = model_class(config)
+            bt.logging.info(f"[ModelFactory] Model instantiated in {time.time() - start:.2f}s")
+            
+            param_count = model.count_parameters()
             bt.logging.info(
-                f"Created {architecture_type} model with {model.count_parameters():,} parameters"
+                f"[ModelFactory] Created {architecture_type} model with {param_count:,} parameters"
             )
             
             return model
             
         except Exception as e:
-            bt.logging.error(f"Failed to create {architecture_type} model: {e}")
+            bt.logging.error(f"[ModelFactory] Failed to create {architecture_type} model: {e}")
+            import traceback
+            bt.logging.error(f"[ModelFactory] Traceback: {traceback.format_exc()}")
             raise
     
     @classmethod

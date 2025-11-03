@@ -38,9 +38,9 @@ import template
 from template.model_factory import ModelArchitectureFactory
 from template.base_model import BaseModel, ModelOutput
 
-# Import HFA components (legacy support)
+# Import HFA components
 try:
-    from hierarchical_flow_anchoring import HierarchicalFlowAnchoring, HierarchicalFlowConfig
+    from template.models.hfa_model import HFAModel, HierarchicalFlowAnchor
     HFA_AVAILABLE = True
     bt.logging.info("✅ HFA components loaded successfully")
 except ImportError as e:
@@ -68,43 +68,126 @@ class HFAMiner(BaseMinerNeuron):
     """
 
     def __init__(self, config=None):
+        bt.logging.info("=" * 80)
+        bt.logging.info("🚀 Initializing HFAMiner...")
+        bt.logging.info("=" * 80)
+        
+        bt.logging.info("📞 Calling BaseMinerNeuron.__init__...")
         super(HFAMiner, self).__init__(config=config)
+        bt.logging.info("✅ BaseMinerNeuron.__init__ completed")
 
         # Initialize device
+        bt.logging.info("🖥️ Detecting compute device...")
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        bt.logging.info(f"🚀 Unified Miner initializing on device: {self.device}")
+        bt.logging.info(f"✅ Using device: {self.device}")
+        if torch.cuda.is_available():
+            bt.logging.info(f"   GPU: {torch.cuda.get_device_name(0)}")
+            bt.logging.info(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
         
-        # Initialize model factory and load configured models
+        # Initialize model factory and storage
+        bt.logging.info("🏭 Initializing model factory...")
         self.model_factory = ModelArchitectureFactory()
         self.models = {}
         self.current_model = None
+        bt.logging.info("✅ Model factory initialized")
         
-        # Load models based on configuration
-        self.load_unified_models()
-            
-        # Performance tracking
+        # Performance tracking (initialize before loading models)
+        bt.logging.info("📊 Initializing performance tracking...")
         self.total_requests = 0
         self.total_tokens_processed = 0
         self.average_processing_time = 0.0
         self.architecture_stats = {}  # Track performance per architecture
+        bt.logging.info("✅ Performance tracking initialized")
+        
+        # Check if we should skip model loading
+        skip_loading = getattr(config, 'model', None) and getattr(config.model, 'skip_loading', False)
+        
+        # Load models based on configuration
+        if skip_loading:
+            bt.logging.warning("⚠️ Skipping model loading (--model.skip_loading flag set)")
+            bt.logging.warning("⚠️ Miner will use mock responses for testing")
+            self.models = {}
+            self.current_model = None
+        else:
+            bt.logging.info("🔄 Starting model loading process...")
+            try:
+                self.load_unified_models()
+                bt.logging.info("✅ Model loading completed successfully")
+            except Exception as e:
+                bt.logging.error(f"❌ Failed to load models during initialization: {e}")
+                bt.logging.warning("⚠️ Miner will continue with empty model set")
+                # Ensure we have the basic attributes even if loading fails
+                if not hasattr(self, 'architecture_stats'):
+                    self.architecture_stats = {}
+                if not hasattr(self, 'models'):
+                    self.models = {}
+                if not hasattr(self, 'current_model'):
+                    self.current_model = None
+        
+        bt.logging.info("🚀 Miner initialization completed")
 
     def load_unified_models(self):
         """Load all configured model architectures using the unified interface."""
         try:
-            bt.logging.info("🔄 Loading unified model architectures...")
+            bt.logging.info("=" * 80)
+            bt.logging.info("🔄 STARTING MODEL LOADING PROCESS")
+            bt.logging.info("=" * 80)
             
             # Get model configurations from config or use defaults
+            bt.logging.info("📋 Step 1/5: Getting model configurations...")
+            import time
+            start_time = time.time()
+            
             model_configs = self._get_model_configurations()
+            bt.logging.info(f"✓ Got configurations in {time.time() - start_time:.2f}s for: {list(model_configs.keys())}")
+            bt.logging.info(f"   Config details: {len(model_configs)} architectures")
             
             # Load each configured architecture
-            for arch_type, config in model_configs.items():
+            for idx, (arch_type, config) in enumerate(model_configs.items(), 1):
                 try:
-                    bt.logging.info(f"📦 Loading {arch_type} model...")
+                    bt.logging.info("-" * 80)
+                    bt.logging.info(f"📦 Step 2/5: Loading model {idx}/{len(model_configs)}: {arch_type}")
+                    bt.logging.info(f"   Config keys: {list(config.keys())}")
                     
-                    # Create model using factory
-                    model = self.model_factory.create_model(arch_type, config)
+                    # Create model using factory with timeout
+                    bt.logging.info(f"🔧 Step 3/5: Calling model factory for {arch_type}...")
+                    bt.logging.info(f"   Factory class: {self.model_factory.__class__.__name__}")
+                    
+                    step_start = time.time()
+                    import signal
+                    
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError(f"Model creation timed out after 30 seconds")
+                    
+                    # Set timeout alarm (only works on Unix systems)
+                    try:
+                        bt.logging.debug(f"   Setting 30s timeout for {arch_type} creation...")
+                        signal.signal(signal.SIGALRM, timeout_handler)
+                        signal.alarm(30)  # 30 second timeout
+                        
+                        bt.logging.info(f"   🏗️ Creating {arch_type} model instance...")
+                        model = self.model_factory.create_model(arch_type, config)
+                        
+                        signal.alarm(0)  # Cancel alarm
+                        bt.logging.info(f"   ✓ Model created in {time.time() - step_start:.2f}s")
+                    except (AttributeError, ValueError) as e:
+                        # Windows doesn't support SIGALRM, try without timeout
+                        bt.logging.warning(f"   ⚠️ Timeout not supported on this platform ({e})")
+                        bt.logging.info(f"   🏗️ Creating {arch_type} model without timeout...")
+                        model = self.model_factory.create_model(arch_type, config)
+                        bt.logging.info(f"   ✓ Model created in {time.time() - step_start:.2f}s")
+                    
+                    bt.logging.info(f"✅ {arch_type} model object created successfully")
+                    
+                    # Move to device
+                    bt.logging.info(f"📍 Step 4/5: Moving {arch_type} model to device: {self.device}")
+                    device_start = time.time()
                     model = model.to(self.device)
+                    bt.logging.info(f"   ✓ Moved to device in {time.time() - device_start:.2f}s")
+                    
+                    bt.logging.info(f"⚙️ Step 5/5: Setting {arch_type} model to eval mode...")
                     model.eval()
+                    bt.logging.info(f"   ✓ Model ready for inference")
                     
                     # Try to load pretrained weights if available
                     checkpoint_loaded = self._load_model_checkpoint(model, arch_type)
@@ -142,6 +225,7 @@ class HFAMiner(BaseMinerNeuron):
             else:
                 bt.logging.error("❌ No models loaded successfully!")
                 self.current_model = None
+                raise RuntimeError("Failed to load any model architectures")
                 
             bt.logging.info(f"🚀 Loaded {len(self.models)} model architectures: {list(self.models.keys())}")
             
@@ -223,6 +307,11 @@ class HFAMiner(BaseMinerNeuron):
                     config_dir, self.config, None
                 )
                 
+                # Check if runtime_config is valid
+                if runtime_config is None:
+                    bt.logging.warning("Runtime config is None, falling back to defaults")
+                    raise ValueError("Runtime config returned None")
+                
                 # Extract model configurations
                 model_configs = {}
                 
@@ -236,7 +325,12 @@ class HFAMiner(BaseMinerNeuron):
                         # Use default config for this architecture
                         model_configs[arch] = self.model_factory.get_default_config(arch)
                 
-                return model_configs
+                if model_configs:
+                    bt.logging.info(f"Loaded model configs for: {list(model_configs.keys())}")
+                    return model_configs
+                else:
+                    bt.logging.warning("No model configs found, falling back to defaults")
+                    raise ValueError("No model configs found")
                 
             except ImportError:
                 bt.logging.warning("ConfigLoader not available, using default configurations")

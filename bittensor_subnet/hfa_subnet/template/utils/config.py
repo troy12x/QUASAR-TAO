@@ -78,6 +78,14 @@ def validate_subnet_configs(config: "bt.Config"):
     Args:
         config: Bittensor configuration object
     """
+    # Initialize subnet config attributes with empty dicts as fallback
+    # Check both if attribute doesn't exist AND if it's None
+    if not hasattr(config, 'subnet') or config.subnet is None:
+        config.subnet = type('SubnetConfig', (), {})()
+    
+    config.subnet.hfa_config = {}
+    config.subnet.subnet_config = {}
+    
     try:
         # Get the directory containing configuration files
         config_dir = os.path.dirname(os.path.abspath(__file__))
@@ -87,10 +95,7 @@ def validate_subnet_configs(config: "bt.Config"):
         # Validate all configuration files
         validated_configs = ConfigValidator.validate_all_configs(config_dir)
         
-        # Store validated configs in the config object for later use
-        if not hasattr(config, 'subnet'):
-            config.subnet = type('SubnetConfig', (), {})()
-        
+        # Update with validated configs if successful
         config.subnet.hfa_config = validated_configs.get('hfa', {})
         config.subnet.subnet_config = validated_configs.get('subnet', {})
         
@@ -98,7 +103,8 @@ def validate_subnet_configs(config: "bt.Config"):
         
     except Exception as e:
         bt.logging.warning(f"Configuration validation failed: {e}")
-        # Don't fail startup on config validation errors, just warn
+        bt.logging.warning("Using empty configuration - miner will use default settings")
+        # Config attributes are already initialized with empty dicts above
 
 
 def add_args(cls, parser):

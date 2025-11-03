@@ -12,7 +12,7 @@
     "tokens_per_second",
     "scaling_efficiency"
   ],
-  "supported_architectures": {
+  "architectures": {
     "hfa": {
       "enabled": true,
       "default_config": {
