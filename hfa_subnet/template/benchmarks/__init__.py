@@ -22,7 +22,7 @@ This module provides the template integration layer for real-world benchmarks
 with the existing HFA subnet validator infrastructure.
 """
 
-from ...benchmarks.benchmark_loader import BenchmarkLoader
-from ...benchmarks.benchmark_task import BenchmarkTask
+from .benchmark_loader import BenchmarkLoader
+from .benchmark_task import BenchmarkTask
 
 __all__ = ['BenchmarkLoader', 'BenchmarkTask']

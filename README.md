@@ -34,6 +34,29 @@ Based on research showing HFA achieves:
 - **Position Independence**: Superior understanding without positional embeddings
 - **Temporal Evolution**: Continuous flow with discrete checkpoint anchoring
 
+### 📈 LongBench Performance Results
+
+Our **SimpleMindTransformer** (6.7M parameters, O(N) complexity) achieves **30.7% overall LongBench accuracy**:
+
+#### 🥇 Excellent Performance (>80%)
+- **Code Completion (repobench-p)**: 95.0%
+- **Trivia Questions (triviaqa)**: 90.0%
+
+#### 🥈 Good Performance (50-80%)
+- **Multi-document News Summarization**: 58.3%
+
+#### 🥉 Competitive Performance (20-50%)
+- **Passage Retrieval**: 36.4%
+- **Multi-field QA**: 33.3%
+- **Government Report Summarization**: 33.3%
+- **Scientific Paper QA**: 30.0%
+
+**Key Insights:**
+- Strong performance on code and factual tasks
+- Competitive results for a 6.7M parameter O(N) model
+- Demonstrates HFA's efficiency vs traditional O(N²) transformers
+
+*[View detailed results →](longbench_accuracy_results.md)*
 
 ### 🏆 Competitive Advantages
 

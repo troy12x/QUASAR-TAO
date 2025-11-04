@@ -108,19 +108,27 @@ class BaseMinerNeuron(BaseNeuron):
         """
 
         # Check that miner is registered on the network.
+        print("DEBUG [run()]: About to call self.sync()...")
         self.sync()
+        print("DEBUG [run()]: self.sync() completed ✓")
 
         # Serve passes the axon information to the network + netuid we are hosting on.
         # This will auto-update if the axon port of external ip have changed.
+        print("DEBUG [run()]: About to serve axon...")
         bt.logging.info(
             f"Serving miner axon {self.axon} on network: {self.config.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
         )
+        print(f"DEBUG [run()]: Calling axon.serve(netuid={self.config.netuid})...")
         self.axon.serve(netuid=self.config.netuid, subtensor=self.subtensor)
+        print("DEBUG [run()]: axon.serve() completed ✓")
 
         # Start  starts the miner's axon, making it active on the network.
+        print("DEBUG [run()]: About to call axon.start()...")
         self.axon.start()
+        print("DEBUG [run()]: axon.start() completed ✓")
 
         bt.logging.info(f"Miner starting at block: {self.block}")
+        print(f"DEBUG [run()]: Miner started at block {self.block} ✓")
 
         # This loop maintains the miner's operations until intentionally stopped.
         try:
@@ -180,7 +188,10 @@ class BaseMinerNeuron(BaseNeuron):
         Starts the miner's operations in a background thread upon entering the context.
         This method facilitates the use of the miner in a 'with' statement.
         """
+        print("DEBUG [__enter__]: Calling run_in_background_thread()...")
         self.run_in_background_thread()
+        print("DEBUG [__enter__]: run_in_background_thread() completed ✓")
+        print("DEBUG [__enter__]: Returning self, entering main loop...")
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):

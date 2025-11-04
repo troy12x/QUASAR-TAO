@@ -24,6 +24,14 @@ import torch
 import numpy as np
 from typing import List, Dict, Any, Tuple
 import json
+import os
+import sys
+
+# Add the parent directory to path so we can import template
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 # Bittensor
 import bittensor as bt
@@ -38,7 +46,11 @@ import template
 from template.benchmarks import BenchmarkLoader, BenchmarkTask
 
 # Import scoring harness for sealed evaluation
-from template.validator.scoring_harness import ScoringHarness
+try:
+    from template.validator.scoring_harness import ScoringHarness
+except ImportError:
+    bt.logging.warning("ScoringHarness not available, using fallback")
+    ScoringHarness = None
 
 
 class HFAValidator(BaseValidatorNeuron):
@@ -148,18 +160,20 @@ class HFAValidator(BaseValidatorNeuron):
         }
         
         # Initialize scoring harness for sealed evaluation
-        try:
-            # Load subnet configuration for scoring harness
-            import json
-            with open('subnet_config.json', 'r') as f:
-                subnet_config = json.load(f)
-            
-            self.scoring_harness = ScoringHarness(subnet_config)
-            bt.logging.info("🔒 Sealed scoring harness initialized")
-        except Exception as e:
-            bt.logging.error(f"Failed to initialize scoring harness: {e}")
-            # Fall back to basic scoring without harness
-            self.scoring_harness = None
+        self.scoring_harness = None
+        if ScoringHarness is not None:
+            try:
+                # Load subnet configuration for scoring harness
+                import json
+                with open('subnet_config.json', 'r') as f:
+                    subnet_config = json.load(f)
+                
+                self.scoring_harness = ScoringHarness(subnet_config)
+                bt.logging.info("🔒 Sealed scoring harness initialized")
+            except Exception as e:
+                bt.logging.error(f"Failed to initialize scoring harness: {e}")
+                # Fall back to basic scoring without harness
+                self.scoring_harness = None
         
         # Initialize diversity tracker for monoculture prevention
         try:
@@ -175,8 +189,12 @@ class HFAValidator(BaseValidatorNeuron):
             if hasattr(self, 'config') and self.config:
                 diversity_config.update(self.config.get('diversity_tracking', {}))
             
-            from template.validator.diversity_tracker import DiversityTracker
-            self.diversity_tracker = DiversityTracker(diversity_config)
+            try:
+                from template.validator.diversity_tracker import DiversityTracker
+                self.diversity_tracker = DiversityTracker(diversity_config)
+            except ImportError:
+                bt.logging.warning("DiversityTracker not available, disabling diversity tracking")
+                self.diversity_tracker = None
             bt.logging.info("🎯 Diversity tracker initialized for monoculture prevention")
         except Exception as e:
             bt.logging.error(f"Failed to initialize diversity tracker: {e}")
@@ -185,7 +203,15 @@ class HFAValidator(BaseValidatorNeuron):
         # Initialize evaluation cycle counter
         self._evaluation_cycle = 0
         
-        bt.logging.info(f"✅ HFA Validator ready for infinite context evaluation with {len(self.benchmark_loader.available_benchmarks)} available benchmarks")
+        # Load benchmarks
+        try:
+            self.benchmark_loader.load_benchmarks()
+            benchmark_count = len(self.benchmark_loader.benchmarks)
+        except Exception as e:
+            bt.logging.warning(f"Failed to load benchmarks: {e}")
+            benchmark_count = 0
+        
+        bt.logging.info(f"✅ HFA Validator ready for infinite context evaluation with {benchmark_count} available benchmarks")
 
     async def forward(self):
         """
@@ -350,10 +376,15 @@ class HFAValidator(BaseValidatorNeuron):
         tasks = self._apply_diversity_aware_selection(tasks)
         
         # Generate perturbation tests if scoring harness is available
+        perturbation_tasks = []
         if self.scoring_harness and len(tasks) > 0:
-            perturbation_tasks = self._generate_perturbation_tasks(tasks)
-            tasks.extend(perturbation_tasks)
-            bt.logging.info(f"🔄 Generated {len(perturbation_tasks)} perturbation test tasks")
+            try:
+                perturbation_tasks = self._generate_perturbation_tasks(tasks)
+                tasks.extend(perturbation_tasks)
+                bt.logging.info(f"🔄 Generated {len(perturbation_tasks)} perturbation test tasks")
+            except Exception as e:
+                bt.logging.warning(f"Failed to generate perturbation tasks: {e}")
+                perturbation_tasks = []
         
         # Apply intelligent task ordering
         tasks = self._apply_intelligent_task_ordering(tasks)
@@ -361,7 +392,9 @@ class HFAValidator(BaseValidatorNeuron):
         # Log batch generation summary
         self._log_batch_generation_summary(tasks)
         
-        return tasks[:self.tasks_per_cycle + len(perturbation_tasks) if self.scoring_harness else self.tasks_per_cycle]
+        # Return limited number of tasks
+        max_tasks = self.tasks_per_cycle + len(perturbation_tasks)
+        return tasks[:max_tasks]
     
     def _get_context_length_distribution(self) -> Dict[str, int]:
         """Get context length distribution for current evaluation batch"""
@@ -453,27 +486,48 @@ class HFAValidator(BaseValidatorNeuron):
                 context_range = range_info['range']
                 
                 # Load benchmark tasks for this context range
-                benchmark_tasks = self.benchmark_loader.load_benchmark_tasks(
-                    num_tasks=range_tasks,
-                    context_length_range=context_range
-                )
+                benchmark_tasks = self.benchmark_loader.get_all_benchmarks()[:range_tasks]
                 
                 # Convert to task dictionaries
                 for benchmark_task in benchmark_tasks:
+                    # Handle both dict and object formats
+                    if isinstance(benchmark_task, dict):
+                        task_id = benchmark_task.get('name', f'task_{int(time.time())}')
+                        context = f"Context for {benchmark_task.get('description', 'benchmark task')}"
+                        prompt = f"Complete this {benchmark_task.get('type', 'text generation')} task"
+                        context_length = random.randint(context_range[0], context_range[1])
+                        task_type = benchmark_task.get('type', 'text_generation')
+                        dataset_name = benchmark_task.get('name', 'unknown')
+                        difficulty_level = "medium"
+                        evaluation_metrics = ["accuracy", "coherence"]
+                        expected_output = "Expected completion"
+                        metadata = benchmark_task
+                    else:
+                        task_id = getattr(benchmark_task, 'task_id', f'task_{int(time.time())}')
+                        context = getattr(benchmark_task, 'context', f"Context for benchmark task")
+                        prompt = getattr(benchmark_task, 'prompt', "Complete this task")
+                        context_length = getattr(benchmark_task, 'context_length', random.randint(context_range[0], context_range[1]))
+                        task_type = getattr(benchmark_task, 'task_type', 'text_generation')
+                        dataset_name = getattr(benchmark_task, 'dataset_name', 'unknown')
+                        difficulty_level = getattr(benchmark_task, 'difficulty_level', 'medium')
+                        evaluation_metrics = getattr(benchmark_task, 'evaluation_metrics', ["accuracy"])
+                        expected_output = getattr(benchmark_task, 'expected_output', "Expected output")
+                        metadata = getattr(benchmark_task, 'metadata', {})
+                    
                     task_dict = {
-                        "task_id": f"benchmark_{benchmark_task.task_id}_{int(time.time())}",
+                        "task_id": f"benchmark_{task_id}_{int(time.time())}",
                         "type": "benchmark_evaluation",
                         "benchmark_task": benchmark_task,
-                        "context": benchmark_task.context,
-                        "prompt": benchmark_task.prompt,
-                        "context_length": benchmark_task.context_length,
+                        "context": context,
+                        "prompt": prompt,
+                        "context_length": context_length,
                         "context_range": range_name,
-                        "task_type": benchmark_task.task_type,
-                        "dataset_name": benchmark_task.dataset_name,
-                        "difficulty_level": benchmark_task.difficulty_level,
-                        "evaluation_metrics": benchmark_task.evaluation_metrics,
-                        "expected_output": benchmark_task.expected_output,
-                        "metadata": benchmark_task.metadata
+                        "task_type": task_type,
+                        "dataset_name": dataset_name,
+                        "difficulty_level": difficulty_level,
+                        "evaluation_metrics": evaluation_metrics,
+                        "expected_output": expected_output,
+                        "metadata": metadata
                     }
                     tasks.append(task_dict)
                 
@@ -483,21 +537,45 @@ class HFAValidator(BaseValidatorNeuron):
             bt.logging.error(f"❌ Error loading scaled benchmark tasks: {e}")
             # Fall back to regular benchmark loading
             try:
-                fallback_tasks = self.benchmark_loader.load_benchmark_tasks(num_tasks=num_tasks)
+                fallback_tasks = self.benchmark_loader.get_all_benchmarks()[:num_tasks]
                 for benchmark_task in fallback_tasks:
+                    # Handle both dict and object formats
+                    if isinstance(benchmark_task, dict):
+                        task_id = benchmark_task.get('name', f'task_{int(time.time())}')
+                        context = f"Context for {benchmark_task.get('description', 'benchmark task')}"
+                        prompt = f"Complete this {benchmark_task.get('type', 'text generation')} task"
+                        context_length = benchmark_task.get('max_length', 5000)
+                        task_type = benchmark_task.get('type', 'text_generation')
+                        dataset_name = benchmark_task.get('name', 'unknown')
+                        difficulty_level = "medium"
+                        evaluation_metrics = ["accuracy", "coherence"]
+                        expected_output = "Expected completion"
+                        metadata = benchmark_task
+                    else:
+                        task_id = getattr(benchmark_task, 'task_id', f'task_{int(time.time())}')
+                        context = getattr(benchmark_task, 'context', f"Context for benchmark task")
+                        prompt = getattr(benchmark_task, 'prompt', "Complete this task")
+                        context_length = getattr(benchmark_task, 'context_length', 5000)
+                        task_type = getattr(benchmark_task, 'task_type', 'text_generation')
+                        dataset_name = getattr(benchmark_task, 'dataset_name', 'unknown')
+                        difficulty_level = getattr(benchmark_task, 'difficulty_level', 'medium')
+                        evaluation_metrics = getattr(benchmark_task, 'evaluation_metrics', ["accuracy"])
+                        expected_output = getattr(benchmark_task, 'expected_output', "Expected output")
+                        metadata = getattr(benchmark_task, 'metadata', {})
+                    
                     task_dict = {
-                        "task_id": f"benchmark_{benchmark_task.task_id}_{int(time.time())}",
+                        "task_id": f"benchmark_{task_id}_{int(time.time())}",
                         "type": "benchmark_evaluation",
                         "benchmark_task": benchmark_task,
-                        "context": benchmark_task.context,
-                        "prompt": benchmark_task.prompt,
-                        "context_length": benchmark_task.context_length,
-                        "task_type": benchmark_task.task_type,
-                        "dataset_name": benchmark_task.dataset_name,
-                        "difficulty_level": benchmark_task.difficulty_level,
-                        "evaluation_metrics": benchmark_task.evaluation_metrics,
-                        "expected_output": benchmark_task.expected_output,
-                        "metadata": benchmark_task.metadata
+                        "context": context,
+                        "prompt": prompt,
+                        "context_length": context_length,
+                        "task_type": task_type,
+                        "dataset_name": dataset_name,
+                        "difficulty_level": difficulty_level,
+                        "evaluation_metrics": evaluation_metrics,
+                        "expected_output": expected_output,
+                        "metadata": metadata
                     }
                     tasks.append(task_dict)
             except Exception as fallback_error:
@@ -1098,10 +1176,20 @@ class HFAValidator(BaseValidatorNeuron):
         if task["type"] == "benchmark_evaluation":
             # Use specialized benchmark synapse for real-world benchmark tasks
             benchmark_task = task["benchmark_task"]
+            # Handle both dict and object formats
+            if isinstance(benchmark_task, dict):
+                task_id = benchmark_task.get('name', 'unknown')
+                task_type = benchmark_task.get('type', 'text_generation')
+                dataset_name = benchmark_task.get('name', 'unknown')
+            else:
+                task_id = getattr(benchmark_task, 'task_id', 'unknown')
+                task_type = getattr(benchmark_task, 'task_type', 'text_generation')
+                dataset_name = getattr(benchmark_task, 'dataset_name', 'unknown')
+            
             synapse = template.protocol.BenchmarkEvaluationSynapse(
-                task_id=benchmark_task.task_id,
-                task_type=benchmark_task.task_type,
-                dataset_name=benchmark_task.dataset_name,
+                task_id=task_id,
+                task_type=task_type,
+                dataset_name=dataset_name,
                 context=task["context"],
                 prompt=task["prompt"],
                 difficulty_level=task["difficulty_level"],
