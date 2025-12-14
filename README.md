@@ -1,6 +1,7 @@
 <div align="center">
 
-# QUASAR: Long Context Evaluation Subnet
+# QUASAR: Long Context Foundation Models & Evaluation Subnet
+
 [![QUASAR](./banner.png)](https://github.com/your-org/QUASAR-TAO)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
