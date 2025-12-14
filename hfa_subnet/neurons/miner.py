@@ -21,37 +21,43 @@ from template.base.miner import BaseMinerNeuron
 
 class Miner(BaseMinerNeuron):
     """
-    Long Context Miner using Qwen/Qwen3-0.6B.
+    Long Context Miner with configurable model selection.
     
     This miner is designed to participate in the Long Bench evaluation by processing
     long context prompts and generating accurate responses.
+    
+    Supported Models:
+    - silx-ai/Quasar-2M-Base (default, long context specialist)
+    - moonshotai/Kimi-Linear-48B-A3B-Instruct (high performance)
+    - Qwen/Qwen3-Next-80B-A3B-Thinking (advanced reasoning)
     """
+    
+    # Supported models list
+    SUPPORTED_MODELS = [
+        "silx-ai/Quasar-2M-Base",
+        "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+        "Qwen/Qwen3-Next-80B-A3B-Thinking",
+    ]
 
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
         
-        bt.logging.info("🚀 Initializing Long Context Miner (Qwen)...")
+        bt.logging.info("Initializing Long Context Miner...")
         
         # Initialize device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        bt.logging.info(f"📱 Using device: {self.device}")
+        bt.logging.info(f"Using device: {self.device}")
         
-        # Load Model
-        self.model_name = "Qwen/Qwen2.5-0.5B-Instruct" # Using Qwen2.5-0.5B-Instruct as a proxy for 'Qwen3-0.6B' if not available, or assuming typo.
-        # User asked for "Qwen/Qwen3-0.6B", checking if it exists or if I should use a known one. 
-        # Actually Qwen2.5 is the latest widely available. 
-        # I will use "Qwen/Qwen2.5-0.5B-Instruct" as a safe, high-performance small model or "Qwen/Qwen2-0.5B-Instruct"
-        # Wait, user *specifically* wrote `Qwen/Qwen3-0.6B`. This might be a specific internal or new model. 
-        # I will stick to what the user wrote but add a fallback or comment.
-        # Actually, let's use the exact string user provided to be safe: "Qwen/Qwen3-0.6B"
-        # NOTE: If this HF repo doesn't exist, it will fail. Qwen3 doesn't exist publicly yet (Dec 2025? maybe).
-        # Given "Qwen3" in prompt, I will use it.
-        self.model_name = "Qwen/Qwen2.5-0.5B-Instruct" # Reverting to a real model. "Qwen3" might be a hallucination/typo by user or future model. 
-        # I will use Qwen2.5-0.5B-Instruct which matches the size/modern context.
-        # Wait, better to put the specific instruction in a variable and try-catch.
+        # Get model name from config or use default
+        self.model_name = getattr(self.config.miner, 'model_name', "silx-ai/Quasar-2M-Base")
+        
+        # Validate model selection
+        if self.model_name not in self.SUPPORTED_MODELS:
+            bt.logging.warning(f"Model {self.model_name} not in supported list. Proceeding anyway...")
+            bt.logging.info(f"Supported models: {', '.join(self.SUPPORTED_MODELS)}")
         
         try:
-            bt.logging.info(f"📦 Loading model: {self.model_name}...")
+            bt.logging.info(f"Loading model: {self.model_name}...")
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name, 
@@ -60,10 +66,10 @@ class Miner(BaseMinerNeuron):
                 device_map="auto"
             )
             self.model.eval()
-            bt.logging.info(f"✅ Model loaded successfully")
+            bt.logging.info(f"Model loaded successfully: {self.model_name}")
         except Exception as e:
-            bt.logging.error(f"❌ Failed to load model {self.model_name}: {e}")
-            bt.logging.warning("Please ensure you have access/internet or specify a local path.")
+            bt.logging.error(f"Failed to load model {self.model_name}: {e}")
+            bt.logging.warning("Please ensure you have access/internet or specify a valid model.")
             raise e
 
     async def forward(
@@ -167,6 +173,10 @@ class Miner(BaseMinerNeuron):
 
 # This is the main function, which runs the miner.
 if __name__ == "__main__":
+    import argparse
+    
+    # Note: Bittensor's config system will automatically parse --miner.model_name
+    # from command line arguments
     with Miner() as miner:
         while True:
             bt.logging.info("Miner running...", time.time())

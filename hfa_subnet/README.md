@@ -1,235 +1,272 @@
-<div align="center">
+# QUASAR Long Context Subnet
 
-# **HFA Infinite Context Subnet** <!-- omit in toc -->
-[![Discord Chat](https://img.shields.io/discord/308323056592486420.svg)](https://discord.gg/bittensor)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) 
+[![Discord](https://img.shields.io/discord/308323056592486420.svg)](https://discord.gg/bittensor)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
----
-
-## Breakthrough Infinite Context Processing on Bittensor <!-- omit in toc -->
-
-**Hierarchical Flow Anchoring (HFA) - The Future of Infinite Context Language Models**
-
-[Discord](https://discord.gg/bittensor) • [Network](https://taostats.io/) • [Research](https://bittensor.com/whitepaper)
-</div></div>
+**Professional long-context evaluation subnet on Bittensor**
 
 ---
 
-## 🚀 HFA Infinite Context Breakthrough
+## Overview
 
-This subnet implements the revolutionary **Hierarchical Flow Anchoring (HFA)** architecture on Bittensor, delivering:
+QUASAR is a Bittensor subnet that evaluates miners' ability to process and understand ultra-long context sequences (32k to 2M tokens). Validators test miners using real-world benchmarks and reward them based on accuracy.
 
-- **🧠 Perfect Memory Retention**: 100% accuracy across unlimited sequence lengths
-- **📈 224% Position Understanding**: Superior position sensitivity vs baseline transformers  
-- **⚡ Linear Scaling**: O(n) complexity vs O(n²) quadratic degradation
-- **🔄 Infinite Context**: Process sequences of 100K+ tokens with consistent performance
-- **🎯 Breakthrough Architecture**: Revolutionary attention mechanism that scales infinitely
+### Key Features
 
-### Key Innovations
-
-1. **Memory Anchoring**: Perfect recall across ultra-long sequences
-2. **Hierarchical Flow**: Efficient information propagation through attention layers
-3. **Position Encoding**: 224% improvement in position understanding
-4. **Scaling Efficiency**: Linear complexity enables infinite context processing
-5. **Coherence Maintenance**: Semantic consistency over unlimited sequence lengths
-
----
-- [Quickstarter template](#quickstarter-template)
-- [Introduction](#introduction)
-  - [Example](#example)
-- [Installation](#installation)
-  - [Before you proceed](#before-you-proceed)
-  - [Install](#install)
-- [Writing your own incentive mechanism](#writing-your-own-incentive-mechanism)
-- [Writing your own subnet API](#writing-your-own-subnet-api)
-- [Subnet Links](#subnet-links)
-- [License](#license)
-
----
-## Quickstarter template
-
-This template contains all the required installation instructions, scripts, and files and functions for:
-- Building Bittensor subnets.
-- Creating custom incentive mechanisms and running these mechanisms on the subnets. 
-
-In order to simplify the building of subnets, this template abstracts away the complexity of the underlying blockchain and other boilerplate code. While the default behavior of the template is sufficient for a simple subnet, you should customize the template in order to meet your specific requirements.
----
-
-## Introduction
-
-**IMPORTANT**: If you are new to Bittensor subnets, read this section before proceeding to [Installation](#installation) section. 
-
-The Bittensor blockchain hosts multiple self-contained incentive mechanisms called **subnets**. Subnets are playing fields in which:
-- Subnet miners who produce value, and
-- Subnet validators who produce consensus
-
-determine together the proper distribution of TAO for the purpose of incentivizing the creation of value, i.e., generating digital commodities, such as intelligence or data. 
-
-Each subnet consists of:
-- Subnet miners and subnet validators.
-- A protocol using which the subnet miners and subnet validators interact with one another. This protocol is part of the incentive mechanism.
-- The Bittensor API using which the subnet miners and subnet validators interact with Bittensor's onchain consensus engine [Yuma Consensus](https://bittensor.com/documentation/validating/yuma-consensus). The Yuma Consensus is designed to drive these actors: subnet validators and subnet miners, into agreement on who is creating value and what that value is worth. 
-
-This starter template is split into three primary files. To write your own incentive mechanism, you should edit these files. These files are:
-1. `template/protocol.py`: Contains the definition of the protocol used by subnet miners and subnet validators.
-2. `neurons/miner.py`: Script that defines the subnet miner's behavior, i.e., how the subnet miner responds to requests from subnet validators.
-3. `neurons/validator.py`: This script defines the subnet validator's behavior, i.e., how the subnet validator requests information from the subnet miners and determines the scores.
-
-### Example
-
-The Bittensor Subnet 1 for Text Prompting is built using this template. See [prompting](https://github.com/macrocosm-os/prompting) for how to configure the files and how to add monitoring and telemetry and support multiple miner types. Also see this Subnet 1 in action on [Taostats](https://taostats.io/subnets/netuid-1/) explorer.
+- Real Benchmarks: LongBench tasks (NarrativeQA, Qasper, GovReport, etc.)
+- Context Scaling: Tests from 32k to 2M tokens
+- Accuracy-Based Rewards: Rewards directly proportional to performance
+- Mock Mode: Test locally with real model inference
+- WandB Integration: Track accuracy and rewards over time
 
 ---
 
-## Installation
+## Quick Start
 
-### Before you proceed
-Before you proceed with the installation of the subnet, note the following: 
+### Prerequisites
 
-- Use these instructions to run your subnet locally for your development and testing, or on Bittensor testnet or on Bittensor mainnet. 
-- **IMPORTANT**: We **strongly recommend** that you first run your subnet locally and complete your development and testing before running the subnet on Bittensor testnet. Furthermore, make sure that you next run your subnet on Bittensor testnet before running it on the Bittensor mainnet.
-- You can run your subnet either as a subnet owner, or as a subnet validator or as a subnet miner. 
-- **IMPORTANT:** Make sure you are aware of the minimum compute requirements for your subnet. See the [Minimum compute YAML configuration](./min_compute.yml).
-- Note that installation instructions differ based on your situation: For example, installing for local development and testing will require a few additional steps compared to installing for testnet. Similarly, installation instructions differ for a subnet owner vs a validator or a miner. 
+- Python 3.9+
+- CUDA-capable GPU (recommended)
+- Bittensor wallet
 
-### Install
+### Installation
 
-- **Running locally**: Follow the step-by-step instructions described in this section: [Running Subnet Locally](./docs/running_on_staging.md).
-- **Running on Bittensor testnet**: Follow the step-by-step instructions described in this section: [Running on the Test Network](./docs/running_on_testnet.md).
-- **Running on Bittensor mainnet**: Follow the step-by-step instructions described in this section: [Running on the Main Network](./docs/running_on_mainnet.md).
+```bash
+# Clone repository
+git clone https://github.com/your-org/QUASAR-TAO
+cd QUASAR-TAO/hfa_subnet
 
----
-
-## Writing your own incentive mechanism
-
-As described in [Quickstarter template](#quickstarter-template) section above, when you are ready to write your own incentive mechanism, update this template repository by editing the following files. The code in these files contains detailed documentation on how to update the template. Read the documentation in each of the files to understand how to update the template. There are multiple **TODO**s in each of the files identifying sections you should update. These files are:
-- `template/protocol.py`: Contains the definition of the wire-protocol used by miners and validators.
-- `neurons/miner.py`: Script that defines the miner's behavior, i.e., how the miner responds to requests from validators.
-- `neurons/validator.py`: This script defines the validator's behavior, i.e., how the validator requests information from the miners and determines the scores.
-- `template/forward.py`: Contains the definition of the validator's forward pass.
-- `template/reward.py`: Contains the definition of how validators reward miner responses.
-
-In addition to the above files, you should also update the following files:
-- `README.md`: This file contains the documentation for your project. Update this file to reflect your project's documentation.
-- `CONTRIBUTING.md`: This file contains the instructions for contributing to your project. Update this file to reflect your project's contribution guidelines.
-- `template/__init__.py`: This file contains the version of your project.
-- `setup.py`: This file contains the metadata about your project. Update this file to reflect your project's metadata.
-- `docs/`: This directory contains the documentation for your project. Update this directory to reflect your project's documentation.
-
-__Note__
-The `template` directory should also be renamed to your project name.
----
-
-# Writing your own subnet API
-To leverage the abstract `SubnetsAPI` in Bittensor, you can implement a standardized interface. This interface is used to interact with the Bittensor network and can be used by a client to interact with the subnet through its exposed axons.
-
-What does Bittensor communication entail? Typically two processes, (1) preparing data for transit (creating and filling `synapse`s) and (2), processing the responses received from the `axon`(s).
-
-This protocol uses a handler registry system to associate bespoke interfaces for subnets by implementing two simple abstract functions:
-- `prepare_synapse`
-- `process_responses`
-
-These can be implemented as extensions of the generic `SubnetsAPI` interface.  E.g.:
-
-
-This is abstract, generic, and takes(`*args`, `**kwargs`) for flexibility. See the extremely simple base class:
-```python
-class SubnetsAPI(ABC):
-    def __init__(self, wallet: "bt.wallet"):
-        self.wallet = wallet
-        self.dendrite = bt.dendrite(wallet=wallet)
-
-    async def __call__(self, *args, **kwargs):
-        return await self.query_api(*args, **kwargs)
-
-    @abstractmethod
-    def prepare_synapse(self, *args, **kwargs) -> Any:
-        """
-        Prepare the synapse-specific payload.
-        """
-        ...
-
-    @abstractmethod
-    def process_responses(self, responses: List[Union["bt.Synapse", Any]]) -> Any:
-        """
-        Process the responses from the network.
-        """
-        ...
-
+# Install dependencies
+pip install -r requirements.txt
+pip install -e .
 ```
 
+### Running Validator
 
-Here is a toy example:
+**Mock Mode (Local Testing)**:
+```bash
+python neurons/validator.py \
+  --wallet.name validator \
+  --wallet.hotkey default \
+  --mock \
+  --logging.debug
+```
+
+**Testnet**:
+```bash
+python neurons/validator.py \
+  --wallet.name validator \
+  --wallet.hotkey default \
+  --subtensor.network test \
+  --netuid 439
+```
+
+**Mainnet**:
+```bash
+python neurons/validator.py \
+  --wallet.name validator \
+  --wallet.hotkey default \
+  --subtensor.network finney \
+  --netuid 439
+```
+
+### Running Miner
+
+**Choose Your Model**:
+```bash
+# Default (lightweight)
+python neurons/miner.py \
+  --wallet.name miner \
+  --wallet.hotkey default \
+  --subtensor.network finney \
+  --netuid 439 \
+  --axon.port 8091
+
+# High performance (Kimi)
+python neurons/miner.py \
+  --wallet.name miner \
+  --wallet.hotkey default \
+  --subtensor.network finney \
+  --netuid 439 \
+  --axon.port 8091 \
+  --miner.model_name "moonshotai/Kimi-Linear-48B-A3B-Instruct"
+
+# Advanced reasoning (Qwen3)
+python neurons/miner.py \
+  --wallet.name miner \
+  --wallet.hotkey default \
+  --subtensor.network finney \
+  --netuid 439 \
+  --axon.port 8091 \
+  --miner.model_name "Qwen/Qwen3-Next-80B-A3B-Thinking"
+```
+
+**Supported Models**:
+- `silx-ai/Quasar-2M-Base` (default, 2M context specialist)
+- `moonshotai/Kimi-Linear-48B-A3B-Instruct` (high performance, 48B params)
+- `Qwen/Qwen3-Next-80B-A3B-Thinking` (advanced reasoning, 80B params)
+
+---
+
+## 📋 How It Works
+
+### Validator Flow
+
+1. **Task Selection**: Randomly select benchmark task from LongBench
+2. **Miner Query**: Send context + question to miners
+3. **Response Evaluation**: Calculate accuracy using dataset-specific metrics
+4. **Reward Calculation**: Apply context-length multipliers
+5. **Weight Update**: Update miner scores based on performance
+
+### Reward System
+
+Rewards are **directly proportional to accuracy**:
 
 ```python
-from bittensor.subnets import SubnetsAPI
-from MySubnet import MySynapse
+# 1. Calculate accuracy (0.0 to 1.0)
+accuracy = metric_fn(response, expected_answer)
 
-class MySynapseAPI(SubnetsAPI):
-    def __init__(self, wallet: "bt.wallet"):
-        super().__init__(wallet)
-        self.netuid = 99
+# 2. Apply context-length multiplier
+multiplier = {
+    "32k": 1.0,    # Baseline
+    "124k": 1.2,   # +20%
+    "512k": 1.5,   # +50%
+    "1.5m": 1.8,   # +80%
+    "2m": 2.0      # +100%
+}[bucket]
 
-    def prepare_synapse(self, prompt: str) -> MySynapse:
-        # Do any preparatory work to fill the synapse
-        data = do_prompt_injection(prompt)
-
-        # Fill the synapse for transit
-        synapse = StoreUser(
-            messages=[data],
-        )
-        # Send it along
-        return synapse
-
-    def process_responses(self, responses: List[Union["bt.Synapse", Any]]) -> str:
-        # Look through the responses for information required by your application
-        for response in responses:
-            if response.dendrite.status_code != 200:
-                continue
-            # potentially apply post processing
-            result_data = postprocess_data_from_response(response)
-        # return data to the client
-        return result_data
+# 3. Final reward
+reward = min(accuracy * multiplier, 1.0)
 ```
 
-You can use a subnet API to the registry by doing the following:
-1. Download and install the specific repo you want
-1. Import the appropriate API handler from bespoke subnets
-1. Make the query given the subnet specific API
+**Examples**:
+- 80% accuracy on 32k context → 0.80 reward
+- 50% accuracy on 2M context → 1.00 reward (capped)
+- 10% accuracy on 32k context → 0.10 reward
 
+---
 
+## 🧪 Mock Mode
 
-# Subnet Links
-In order to see real-world examples of subnets in-action, see the `subnet_links.py` document or access them from inside the `template` package by:
+Test your validator locally with real model inference:
+
+```bash
+python neurons/validator.py --mock --logging.debug
+```
+
+**Features**:
+- Loads configurable language model for inference
+- Generates real responses for testing
+- Calculates actual accuracy metrics
+- Logs performance to WandB
+- No blockchain connection required
+
+**Expected Output**:
+```
+🔄 Loading Qwen/Qwen2.5-0.5B-Instruct for mock inference...
+✅ Model loaded successfully on cuda:0
+📋 Task: narrativeqa_7389 [32k] | Len: 13619
+💰 Rewards: 0.5234 | 🎯 Accuracy: 0.5234 | Top5: ['0.523', '0.612', ...]
+```
+
+---
+
+## 📊 Monitoring
+
+### WandB Metrics
+
+The validator logs the following metrics to Weights & Biases:
+
+- `accuracy/{bucket}`: Per-bucket accuracy (32k, 124k, 512k, 1.5m, 2m)
+- `avg_accuracy`: Overall accuracy across all buckets
+- `rewards/{bucket}`: Normalized rewards per bucket
+- `context_length`: Task context length
+- `global_difficulty`: Current difficulty level
+
+### Local Logs
+
+Monitor validator progress:
+```bash
+tail -f ~/.bittensor/miners/validator/default/netuid439/validator/logs/validator.log
+```
+
+---
+
+## 🛠️ Configuration
+
+### Validator Config
+
+Edit `hfa_config.json` and `subnet_config.json` to customize:
+
+- Enabled benchmarks
+- Context length tests
+- Scoring weights
+- Evaluation cycle duration
+
+### Key Parameters
+
 ```python
-import template
-template.SUBNET_LINKS
-[{'name': 'sn0', 'url': ''},
- {'name': 'sn1', 'url': 'https://github.com/opentensor/prompting/'},
- {'name': 'sn2', 'url': 'https://github.com/bittranslateio/bittranslate/'},
- {'name': 'sn3', 'url': 'https://github.com/gitphantomman/scraping_subnet/'},
- {'name': 'sn4', 'url': 'https://github.com/manifold-inc/targon/'},
-...
-]
+# neurons/validator.py
+REWARD_MULTIPLIERS = {
+    "32k": 1.0,
+    "124k": 1.2,
+    "512k": 1.5,
+    "1.5m": 1.8,
+    "2m": 2.0
+}
+
+PENALTY_NO_RESPONSE = 0.0
+PENALTY_FAKE = -0.5
 ```
 
-## License
-This repository is licensed under the MIT License.
-```text
-# The MIT License (MIT)
-# Copyright © 2024 Opentensor Foundation
+---
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
-# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+## 📁 Project Structure
 
-# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
-# the Software.
-
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
-# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
 ```
+hfa_subnet/
+├── neurons/
+│   ├── validator.py          # Validator logic
+│   └── miner.py               # Miner logic
+├── template/
+│   ├── protocol.py            # Synapse definitions
+│   ├── mock.py                # Mock mode implementation
+│   ├── benchmarks/
+│   │   ├── benchmark_loader.py
+│   │   └── metrics.py
+│   └── base/
+│       ├── validator.py       # Base validator class
+│       └── neuron.py          # Base neuron class
+├── hfa_config.json            # HFA architecture config
+├── subnet_config.json         # Subnet parameters
+└── requirements.txt           # Python dependencies
+```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🔗 Links
+
+- [Bittensor Documentation](https://docs.bittensor.com/)
+- [Discord](https://discord.gg/bittensor)
+- [Taostats](https://taostats.io/)
+
+---
+
+## 💡 Support
+
+For questions or issues:
+1. Check existing [GitHub Issues](https://github.com/your-org/QUASAR-TAO/issues)
+2. Join our [Discord](https://discord.gg/bittensor)
+3. Create a new issue with detailed information
