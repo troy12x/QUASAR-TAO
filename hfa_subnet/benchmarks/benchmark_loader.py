@@ -21,76 +21,71 @@ from typing import List, Dict, Any, Optional
 from .benchmark_task import BenchmarkTask
 from .longbench_loader import LongBenchLoader
 from .hotpotqa_loader import HotpotQALoader
-from .govreport_loader import GovReportLoader
-from .needle_haystack_loader import NeedleHaystackLoader
 
 import bittensor as bt
 
 
 class BenchmarkLoader:
     """
-    Main benchmark loader that coordinates loading from multiple real-world benchmark datasets.
+    LongBench-focused benchmark loader for QUASAR-TAO subnet.
     
-    This class integrates with the existing HFA subnet validator to provide real-world
-    benchmark evaluation capabilities. It supports:
+    This class provides comprehensive long-context evaluation using LongBench,
+    the standardized benchmark for evaluating language models on realistic
+    long-context tasks across multiple domains:
     
-    - LongBench: Comprehensive long-context evaluation suite
-    - HotpotQA (distractor): Multi-hop reasoning with distractors  
-    - GovReport: Government report summarization tasks
-    - Needle-in-Haystack: Information retrieval in long contexts
+    - Multi-document QA (HotpotQA, 2WikiMultihopQA, MuSiQue, DuReader)
+    - Single-document QA (MultiFieldQA, NarrativeQA, Qasper)
+    - Summarization (GovReport, QMSum, MultiNews, VCSUM)
+    - Few-shot Learning (TriviaQA, SAMSum, TREC, LSHT)
+    - Synthetic Tasks (PassageRetrieval, PassageCount)
+    - Code Understanding (LCC, RepoBench-P)
     
-    The loader provides fallback to synthetic task generation when real benchmarks
-    are unavailable, ensuring continuous evaluation capability.
+    Context lengths: 8k-128k+ words
+    Evaluation metrics: F1, ROUGE-L, Accuracy, Edit Similarity
     """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
-        Initialize benchmark loader with configuration.
+        Initialize LongBench-only benchmark loader.
         
         Args:
             config: Configuration dictionary with benchmark settings
         """
         self.config = config or {}
         
-        # Initialize individual benchmark loaders
+        # Initialize LongBench loader (primary benchmark)
         self.longbench_loader = LongBenchLoader(self.config.get('longbench', {}))
-        self.hotpotqa_loader = HotpotQALoader(self.config.get('hotpotqa', {}))
-        self.govreport_loader = GovReportLoader(self.config.get('govreport', {}))
-        self.needle_haystack_loader = NeedleHaystackLoader(self.config.get('needle_haystack', {}))
         
         # Benchmark availability tracking
         self.available_benchmarks = self._check_benchmark_availability()
         
-        # Task generation settings
-        self.max_tasks_per_benchmark = self.config.get('max_tasks_per_benchmark', 3)
+        # Task generation settings for LongBench
+        self.max_tasks_per_benchmark = self.config.get('max_tasks_per_benchmark', 5)
         self.context_length_ranges = self.config.get('context_length_ranges', [
-            (1000, 4000),    # Short context
-            (4000, 16000),   # Medium context  
-            (16000, 64000),  # Long context
-            (64000, 100000)  # Ultra-long context
+            (8000, 16000),    # Short long-context
+            (16000, 32000),   # Medium long-context  
+            (32000, 64000),   # Long context
+            (64000, 128000)   # Ultra-long context
         ])
         
-        bt.logging.info(f"BenchmarkLoader initialized with {len(self.available_benchmarks)} available benchmarks")
+        bt.logging.info(f"QUASAR-TAO LongBench Loader initialized - Experimental subnet for long-context evaluation")
     
     def _check_benchmark_availability(self) -> List[str]:
         """Check which benchmarks are available for loading"""
         available = []
         
-        # Check each benchmark loader
+        # Check LongBench loader (primary benchmark for QUASAR-TAO)
         loaders = {
             'longbench': self.longbench_loader,
-            'hotpotqa': self.hotpotqa_loader, 
-            'govreport': self.govreport_loader,
-            'needle_haystack': self.needle_haystack_loader
         }
         
         for name, loader in loaders.items():
             try:
                 if loader.is_available():
                     available.append(name)
-                    bt.logging.info(f"Benchmark {name} is available")
+                    bt.logging.info(f" LongBench benchmark is available")
                 else:
-                    bt.logging.warning(f"Benchmark {name} is not available")
+                    bt.logging.warning(f" LongBench benchmark is not available")
             except Exception as e:
                 bt.logging.error(f"Error checking availability of {name}: {e}")
         
@@ -157,14 +152,8 @@ class BenchmarkLoader:
         
         if benchmark_type == 'longbench':
             return self.longbench_loader.load_tasks(num_tasks, context_length_range)
-        elif benchmark_type == 'hotpotqa':
-            return self.hotpotqa_loader.load_tasks(num_tasks, context_length_range)
-        elif benchmark_type == 'govreport':
-            return self.govreport_loader.load_tasks(num_tasks, context_length_range)
-        elif benchmark_type == 'needle_haystack':
-            return self.needle_haystack_loader.load_tasks(num_tasks, context_length_range)
         else:
-            raise ValueError(f"Unknown benchmark type: {benchmark_type}")
+            raise ValueError(f"QUASAR-TAO only supports LongBench. Got: {benchmark_type}")
     
     def _generate_synthetic_fallback_tasks(self, 
                                          num_tasks: int,

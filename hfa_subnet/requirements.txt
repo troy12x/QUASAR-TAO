@@ -30,3 +30,9 @@ packaging>=23.0
 # Optional: For enhanced performance
 accelerate>=0.20.0
 optimum>=1.8.0
+
+# LongBench Dependencies
+rouge>=1.0.1
+jieba>=0.42.1
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.12.2
