@@ -63,6 +63,11 @@ class BaseNeuron(ABC):
         base_config = copy.deepcopy(config or BaseNeuron.config())
         self.config = self.config()
         self.config.merge(base_config)
+        
+        # Force netuid to be int to prevent float scaling issues
+        if hasattr(self.config, 'netuid'):
+            self.config.netuid = int(self.config.netuid)
+            
         self.check_config(self.config)
 
         # Set up logging with the provided configuration.
@@ -110,7 +115,7 @@ class BaseNeuron(ABC):
             bt.logging.info(f"   Metagraph has {len(self.metagraph.hotkeys)} neurons")
 
         bt.logging.info(f"📋 Wallet: {self.wallet}")
-        bt.logging.info(f"📋 Subtensor: {self.subtensor}")
+        bt.logging.info(f"📋 Subtensor: {self.subtensor} (Type: {type(self.subtensor)})")
         bt.logging.info(f"📋 Metagraph: {self.metagraph}")
 
         # Check if the miner is registered on the Bittensor network before proceeding further.
