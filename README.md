@@ -142,7 +142,7 @@ Current supported models for miners:
 
 | Model | Parameters | Context Length | Specialty |
 |-------|-----------|----------------|-----------|
-| silx-ai/Quasar-2M-Base | - | 2M tokens | Long context specialist |
+| silx-ai/Quasar-2M-Base | 26B | 2M tokens | Long context specialist |
 | moonshotai/Kimi-Linear-48B-A3B-Instruct | 48B | 1M+ tokens | High performance |
 | Qwen/Qwen3-Next-80B-A3B-Thinking | 80B | 128k tokens | Advanced reasoning |
 
