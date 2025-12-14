@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
-## Evaluating the Future of Long-Context Understanding
+## Shaping the Future of Long-Context Understanding
 
 </div>
 
@@ -32,9 +32,9 @@
 
 ## Introduction
 
-Welcome to QUASAR, a Bittensor subnet dedicated to evaluating and incentivizing long-context language models. As AI systems tackle increasingly complex tasks requiring understanding of extensive documents, code repositories, and conversations, the ability to process ultra-long contexts (32k to 2M tokens) becomes critical.
+Welcome to QUASAR, a Bittensor subnet dedicated to advancing long-context language models through comprehensive evaluation and incentivization. As AI systems tackle increasingly complex tasks requiring understanding of extensive documents, code repositories, and conversations, the ability to process ultra-long contexts (32k to 2M tokens) becomes critical.
 
-QUASAR creates a decentralized evaluation framework where miners compete by running state-of-the-art long-context models, and validators assess their performance using real-world benchmarks. By harnessing the Bittensor network, we're building the most comprehensive long-context evaluation system in existence.
+QUASAR provides a decentralized evaluation framework where miners compete by running state-of-the-art long-context models, and validators assess their performance using real-world benchmarks. Our main product is the QUASAR foundation models—built specifically to process millions of tokens—which serve as the benchmark for evaluating all models on long-context capabilities. By harnessing the Bittensor network, we're building the most comprehensive long-context evaluation system in existence while extending model capabilities for handling increasingly large contexts.
 
 ## Key Features
 
