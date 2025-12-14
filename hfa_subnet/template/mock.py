@@ -7,35 +7,88 @@ import bittensor as bt
 from typing import List
 
 
+class MockWallet:
+    def __init__(self, config=None, **kwargs):
+        self._config = config
+        self.name = "mock_wallet"
+        self.hotkey_str = "mock_hotkey"
+        self._hotkey = None
+        self._coldkey = None
+        self._coldkeypub = None
+
+    @property
+    def hotkey(self):
+        if self._hotkey is None:
+            self._hotkey = bt.Keypair.create_from_mnemonic(bt.Keypair.generate_mnemonic())
+        return self._hotkey
+
+    @property
+    def coldkey(self):
+        if self._coldkey is None:
+            self._coldkey = bt.Keypair.create_from_mnemonic(bt.Keypair.generate_mnemonic())
+        return self._coldkey
+
+    @property
+    def coldkeypub(self):
+        if self._coldkeypub is None:
+            self._coldkeypub = self.coldkey
+        return self._coldkeypub
+        
+    def unlock_hotkey(self):
+        return self.hotkey
+
+    def __str__(self):
+        return f"MockWallet({self.name}, {self.hotkey.ss58_address})"
+        
+    def __repr__(self):
+        return self.__str__()
+
+
 class MockSubtensor(bt.MockSubtensor):
+    def get_current_block(self):
+        return 1000
+
+    @property
+    def block(self):
+        return 100
+
     def __init__(self, netuid, n=16, wallet=None, network="mock"):
         super().__init__(network=network)
 
-        if not self.subnet_exists(netuid):
+        print(f"DEBUG: MockSubtensor init. Netuid: {netuid}")
+        
+        # Force creation of subnet to ensure state is correct
+        try:
+            print(f"DEBUG: Attempting to create subnet {netuid}...")
             self.create_subnet(netuid)
+            print(f"DEBUG: Subnet {netuid} created.")
+        except Exception as e:
+            print(f"DEBUG: Subnet creation failed (might already exist): {e}")
 
         # Register ourself (the validator) as a neuron at uid=0
         if wallet is not None:
+            print(f"DEBUG: Registering validator {wallet.hotkey.ss58_address}...")
             self.force_register_neuron(
                 netuid=netuid,
-                hotkey=wallet.hotkey.ss58_address,
-                coldkey=wallet.coldkey.ss58_address,
+                hotkey_ss58=wallet.hotkey.ss58_address,
+                coldkey_ss58=wallet.coldkey.ss58_address,
                 balance=100000,
                 stake=100000,
             )
 
         # Register n mock neurons who will be miners
+        print(f"DEBUG: Registering {n} mock miners...")
         for i in range(1, n + 1):
             self.force_register_neuron(
                 netuid=netuid,
-                hotkey=f"miner-hotkey-{i}",
-                coldkey="mock-coldkey",
+                hotkey_ss58=f"miner-hotkey-{i}",
+                coldkey_ss58="mock-coldkey",
                 balance=100000,
                 stake=100000,
             )
 
 
-class MockMetagraph(bt.metagraph):
+class MockMetagraph(bt.Metagraph):
     def __init__(self, netuid=1, network="mock", subtensor=None):
         super().__init__(netuid=netuid, network=network, sync=False)
 
@@ -49,9 +102,14 @@ class MockMetagraph(bt.metagraph):
 
         bt.logging.info(f"Metagraph: {self}")
         bt.logging.info(f"Axons: {self.axons}")
+        
+        # Ensure these are real integers, not Mocks
+        self.n = len(self.axons)
+        self.last_update = [0] * self.n
+        self.block = 0
 
 
-class MockDendrite(bt.dendrite):
+class MockDendrite(bt.Dendrite):
     """
     Replaces a real bittensor network request with a mock request that just returns some static response for all axons that are passed and adds some random delay.
     """
@@ -61,7 +119,7 @@ class MockDendrite(bt.dendrite):
 
     async def forward(
         self,
-        axons: List[bt.axon],
+        axons: List[bt.Axon],
         synapse: bt.Synapse = bt.Synapse(),
         timeout: float = 12,
         deserialize: bool = True,

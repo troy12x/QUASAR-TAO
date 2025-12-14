@@ -26,24 +26,45 @@
     "diversity_bonus": 0.10
   },
   "architecture_support": {
-    "enabled_architectures": ["hfa", "simplemind", "hybrid", "standard"],
+    "enabled_architectures": [
+      "hfa",
+      "simplemind",
+      "hybrid",
+      "standard"
+    ],
     "architecture_diversity_bonus": 0.05,
     "novel_architecture_bonus": 0.02,
     "baseline_comparison_required": true
   },
   "benchmark_evaluation": {
-    "enabled_benchmarks": ["longbench", "hotpotqa_distractor", "govreport", "needle_in_haystack"],
+    "enabled_benchmarks": [
+      "longbench",
+      "hotpotqa_distractor",
+      "govreport",
+      "needle_in_haystack"
+    ],
     "synthetic_fallback": true,
     "benchmark_rotation_schedule": "round_robin",
     "context_length_scaling": {
       "min_length": 1000,
       "max_length": 100000,
-      "scaling_steps": [1000, 5000, 15000, 32000, 50000, 100000]
+      "scaling_steps": [
+        1000,
+        5000,
+        15000,
+        32000,
+        50000,
+        100000
+      ]
     }
   },
   "perturbation_testing": {
     "enabled": true,
-    "perturbation_types": ["paraphrase", "reorder", "noise_injection"],
+    "perturbation_types": [
+      "paraphrase",
+      "reorder",
+      "noise_injection"
+    ],
     "consistency_threshold": 0.85,
     "perturbation_frequency": 0.2,
     "max_perturbations_per_cycle": 2,
@@ -53,7 +74,11 @@
     "cosine_similarity_threshold": 0.95,
     "diversity_penalty_factor": 0.1,
     "monoculture_detection": true,
-    "baseline_models": ["gpt2", "llama2-7b"]
+    "baseline_models": [
+      "kimi-linear",
+      "silx-ai/Quasar-2M-Base",
+      "Qwen/Qwen3-0.6B"
+    ]
   },
   "audit_and_transparency": {
     "logit_hash_computation": true,

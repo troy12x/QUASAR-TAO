@@ -26,7 +26,7 @@ from abc import ABC, abstractmethod
 from template.utils.config import check_config, add_args, config
 from template.utils.misc import ttl_get_block
 from template import __spec_version__ as spec_version
-from template.mock import MockSubtensor, MockMetagraph
+from template.mock import MockSubtensor, MockMetagraph, MockWallet
 
 
 class BaseNeuron(ABC):
@@ -50,9 +50,9 @@ class BaseNeuron(ABC):
     def config(cls):
         return config(cls)
 
-    subtensor: "bt.subtensor"
-    wallet: "bt.wallet"
-    metagraph: "bt.metagraph"
+    subtensor: "bt.Subtensor"
+    wallet: "bt.Wallet"
+    metagraph: "bt.Metagraph"
     spec_version: int = spec_version
 
     @property
@@ -83,7 +83,7 @@ class BaseNeuron(ABC):
         # The wallet holds the cryptographic key pairs for the miner.
         if self.config.mock:
             bt.logging.info("📝 Using mock wallet and subtensor...")
-            self.wallet = bt.MockWallet(config=self.config)
+            self.wallet = MockWallet(config=self.config)
             self.subtensor = MockSubtensor(
                 self.config.netuid, wallet=self.wallet
             )
@@ -92,14 +92,14 @@ class BaseNeuron(ABC):
             )
         else:
             bt.logging.info("💼 Creating wallet...")
-            self.wallet = bt.wallet(config=self.config)
+            self.wallet = bt.Wallet(config=self.config)
             bt.logging.info(f"✅ Wallet created: {self.wallet}")
             
             bt.logging.info(f"🌐 Connecting to subtensor (network: {self.config.subtensor.network})...")
             bt.logging.info("   This may take 10-30 seconds...")
             import time
             start = time.time()
-            self.subtensor = bt.subtensor(config=self.config)
+            self.subtensor = bt.Subtensor(config=self.config)
             bt.logging.info(f"✅ Subtensor connected in {time.time() - start:.2f}s: {self.subtensor}")
             
             bt.logging.info(f"📊 Downloading metagraph for netuid {self.config.netuid}...")
