@@ -3,8 +3,90 @@ import time
 import asyncio
 import random
 import bittensor as bt
+import torch
 
 from typing import List
+
+# Model loading for mock inference
+try:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    
+
+class MockMinerModel:
+    """Loads and runs a real model for mock miner responses."""
+    
+    _instance = None
+    _model = None
+    _tokenizer = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def __init__(self):
+        if not TRANSFORMERS_AVAILABLE:
+            bt.logging.warning("⚠️ transformers not available, using dummy responses")
+            return
+            
+        if self._model is None:
+            try:
+                bt.logging.info("🔄 Loading Qwen/Qwen2.5-0.5B-Instruct for mock inference...")
+                model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+                
+                self._tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    device_map="auto" if torch.cuda.is_available() else "cpu",
+                    trust_remote_code=True
+                )
+                self._model.eval()
+                bt.logging.success(f"✅ Model loaded successfully on {next(self._model.parameters()).device}")
+            except Exception as e:
+                bt.logging.error(f"❌ Failed to load model: {e}")
+                self._model = None
+                self._tokenizer = None
+    
+    def generate_response(self, context: str, question: str, max_new_tokens: int = 100) -> str:
+        """Generate a response using the loaded model."""
+        if self._model is None or self._tokenizer is None:
+            # Fallback to dummy responses
+            return random.choice([
+                "This is a sample answer.",
+                "I don't know.",
+                "The answer is unclear.",
+            ])
+        
+        try:
+            # Format prompt
+            prompt = f"Context: {context[:2000]}\n\nQuestion: {question}\n\nAnswer:"
+            
+            # Tokenize
+            inputs = self._tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+            inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+            
+            # Generate
+            with torch.no_grad():
+                outputs = self._model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    pad_token_id=self._tokenizer.eos_token_id
+                )
+            
+            # Decode
+            response = self._tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
+            return response.strip()
+            
+        except Exception as e:
+            bt.logging.debug(f"Generation error: {e}")
+            return "Error generating response"
 
 
 class MockWallet:
@@ -36,6 +118,13 @@ class MockWallet:
         
     def unlock_hotkey(self):
         return self.hotkey
+
+    @property
+    def ss58_address(self):
+        return self.hotkey.ss58_address
+
+    def sign(self, data):
+        return self.hotkey.sign(data)
 
     def __str__(self):
         return f"MockWallet({self.name}, {self.hotkey.ss58_address})"
@@ -336,27 +425,33 @@ class MockDendrite(bt.Dendrite):
                 s = synapse.copy()
                 # Attach some more required data so it looks real
                 s = self.preprocess_synapse_for_request(axon, s, timeout)
-                # We just want to mock the response, so we'll just fill in some data
-                process_time = random.random()
+                
+                # Use real model for mock responses
+                process_time = random.random() * 0.5  # Simulate some processing time
                 if process_time < timeout:
                     s.dendrite.process_time = str(time.time() - start_time)
-                    # Update the status code and status message of the dendrite to match the axon
-                    # TODO (developer): replace with your own expected synapse data
-                    s.dummy_output = s.dummy_input * 2
                     s.dendrite.status_code = 200
                     s.dendrite.status_message = "OK"
                     synapse.dendrite.process_time = str(process_time)
+                    
+                    # Generate real response using model
+                    try:
+                        model = MockMinerModel()
+                        context = getattr(s, 'context', '')
+                        question = getattr(s, 'question', '')
+                        s.response = model.generate_response(context, question, max_new_tokens=50)
+                    except Exception as e:
+                        bt.logging.debug(f"Model generation failed: {e}")
+                        s.response = ""
                 else:
-                    s.dummy_output = 0
                     s.dendrite.status_code = 408
                     s.dendrite.status_message = "Timeout"
                     synapse.dendrite.process_time = str(timeout)
+                    s.response = ""
 
-                # Return the updated synapse object after deserializing if requested
-                if deserialize:
-                    return s.deserialize()
-                else:
-                    return s
+                # Always return the synapse object (not deserialized dict)
+                # so validator can access .response and other attributes
+                return s
 
             return await asyncio.gather(
                 *(
@@ -374,4 +469,4 @@ class MockDendrite(bt.Dendrite):
         Returns:
             str: The string representation of the Dendrite object in the format "dendrite(<user_wallet_address>)".
         """
-        return "MockDendrite({})".format(self.keypair.ss58_address)
+        return "MockDendrite({})"

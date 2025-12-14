@@ -28,7 +28,7 @@ from template.benchmarks.metrics import dataset2metric
 
 # --- Constants ---
 WANDB_PROJECT = "quasar-long-context-subnet"
-WANDB_ENTITY = "quasar-team" # Configuring this requires user setup
+# WANDB_ENTITY will be auto-detected from logged-in user
 
 # Penalties
 PENALTY_NO_RESPONSE = 0.0
@@ -72,6 +72,11 @@ class Validator(BaseValidatorNeuron):
     """
 
     def __init__(self, config=None):
+        # Initialize tracking variables BEFORE super().__init__() 
+        # because base class calls save_state() during sync()
+        self.difficulty_level = "medium"
+        self.bucket_scores = {}  # Will be properly initialized after metagraph exists
+        
         super(Validator, self).__init__(config=config)
         bt.logging.info("🚀 Initializing Professional Long Context Validator...")
         
@@ -81,6 +86,9 @@ class Validator(BaseValidatorNeuron):
                 'enabled_tasks': ['narrativeqa', 'qasper', 'multifieldqa_en', 'hotpotqa', 'gov_report', 'qmsum', 'multi_news', 'trec', 'triviaqa']
             }
         })
+        
+        # Now properly initialize bucket_scores with correct size
+        self.bucket_scores = {b: torch.zeros(self.metagraph.n) for b in BUCKETS}
         
         # 2. State Management
         self.load_state()
@@ -92,16 +100,23 @@ class Validator(BaseValidatorNeuron):
         self.semaphore = asyncio.Semaphore(10) # Limit concurrent heavy ops if needed
 
     def init_wandb(self):
-        """Initialize WandB logging."""
+        """Initialize Weights & Biases logging."""
         try:
             if self.config.wandb.off:
+                self.wandb_run = None
                 return
+            
+            # Auto-detect entity from logged-in user
+            try:
+                wandb_entity = wandb.api.default_entity
+            except:
+                wandb_entity = None  # Let WandB use default
                 
             run_name = f"validator-{self.uid}-{time.strftime('%Y-%m-%d_%H-%M-%S')}"
             self.wandb_run = wandb.init(
                 name=run_name,
                 project=WANDB_PROJECT,
-                entity=WANDB_ENTITY,
+                entity=wandb_entity,  # Auto-detected or None for default
                 config={
                     "uid": self.uid,
                     "hotkey": self.wallet.hotkey.ss58_address,
@@ -109,9 +124,10 @@ class Validator(BaseValidatorNeuron):
                 },
                 allow_val_change=True
             )
-            bt.logging.success(f"✅ WandB initialized: {run_name}")
+            bt.logging.success(f"✅ WandB initialized: {run_name} (entity: {wandb_entity or 'default'})")
         except Exception as e:
             bt.logging.warning(f"❌ Failed to init WandB: {e}. Running without it.")
+            self.wandb_run = None
 
     def save_state(self):
         """Save validator state to disk."""
@@ -138,7 +154,7 @@ class Validator(BaseValidatorNeuron):
             
             state_path = self.config.neuron.full_path + "/state.pt"
             if os.path.exists(state_path):
-                state = torch.load(state_path)
+                state = torch.load(state_path, weights_only=False)
                 self.step = state.get("step", 0)
                 self.scores = state.get("scores", self.scores).to(self.device)
                 self.difficulty_level = state.get("difficulty_level", "medium")
@@ -183,6 +199,12 @@ class Validator(BaseValidatorNeuron):
                 # 4. Scoring
                 rewards = self.score_responses(task, responses, miner_uids)
                 
+                # Log rewards and accuracy
+                if rewards:
+                    avg_reward = sum(rewards) / len(rewards)
+                    avg_accuracy = sum(self.last_raw_accuracies) / len(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
+                    bt.logging.info(f"💰 Rewards: {avg_reward:.4f} | 🎯 Accuracy: {avg_accuracy:.4f} | Top5: {[f'{r:.3f}' for r in rewards[:5]]}")
+                
                 # 5. Update Weights (Per Bucket)
                 self.update_scores(rewards, miner_uids, bucket_name)
                 
@@ -219,6 +241,7 @@ class Validator(BaseValidatorNeuron):
         metric_fn = dataset2metric.get(task.dataset_name, dataset2metric['narrativeqa'])
         
         raw_scores = []
+        raw_accuracies = []  # Track raw accuracy before multipliers
         
         for uid, response in zip(miner_uids, responses):
             if not response or not response.response:
@@ -237,6 +260,9 @@ class Validator(BaseValidatorNeuron):
                 else:
                     score = metric_fn(response.response, task.expected_output)
                 
+                # Track raw accuracy
+                raw_accuracies.append(score)
+                
                 # Apply Non-Linear Multiplier based on context length
                 bucket = self.get_bucket(task.context_length)
                 multiplier = REWARD_MULTIPLIERS.get(bucket, 1.0)
@@ -247,22 +273,20 @@ class Validator(BaseValidatorNeuron):
                 bt.logging.error(f"Scoring error for {uid}: {e}")
                 raw_scores.append(0.0)
 
-        # Normalize Scores (Sigmoid / Softmax-ish)
-        # We want to highlight the best performers relative to the rest
+        # Store raw accuracy for logging
+        self.last_raw_accuracies = raw_accuracies
+        
+        # Use RAW SCORES directly (like Omegalabs)
+        # This makes rewards EXACTLY proportional to accuracy
+        # 10% accuracy = 0.1 reward, 90% accuracy = 0.9 reward
         if not raw_scores:
             return []
             
         rewards_tensor = torch.tensor(raw_scores, dtype=torch.float32)
         
-        # Sigmoid Normalization centered around mean
-        if torch.std(rewards_tensor) > 0:
-            rewards_tensor = torch.sigmoid((rewards_tensor - rewards_tensor.mean()) / (rewards_tensor.std() + 1e-6))
-        else:
-            # If all scores are same (e.g. all 0), keep them as is (or zero if all zero)
-            if rewards_tensor.sum() == 0:
-                rewards_tensor = torch.zeros_like(rewards_tensor)
-            else:
-                rewards_tensor = torch.ones_like(rewards_tensor) * 0.5 # Default middle ground
+        # Only clip to valid range [0, 1]
+        # Context-length multipliers already applied, so just ensure valid range
+        rewards_tensor = torch.clamp(rewards_tensor, 0.0, 1.0)
 
         return rewards_tensor.tolist()
 
@@ -290,12 +314,26 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info(f"� Global Scores Updated. Top: {torch.topk(self.scores, 5).values}")
 
     def log_metrics(self, rewards, miner_uids, bucket_name, task):
-        if self.config.wandb.off: return
+        if self.config.wandb.off or not hasattr(self, 'wandb_run') or self.wandb_run is None:
+            return
         
         avg_reward = sum(rewards) / len(rewards) if rewards else 0
+        avg_accuracy = sum(self.last_raw_accuracies) / len(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
+        
         wandb.log({
             "step": self.step,
             f"rewards/{bucket_name}": avg_reward,
+            f"accuracy/{bucket_name}": avg_accuracy,
+            "avg_accuracy": avg_accuracy,
             "context_length": task.context_length,
             "global_difficulty": self.difficulty_level
         })
+
+
+# Entry point
+if __name__ == "__main__":
+    with Validator() as validator:
+        while True:
+            bt.logging.info(f"Validator running... step: {validator.step}")
+            time.sleep(60)
+
