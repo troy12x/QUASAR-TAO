@@ -97,7 +97,6 @@ class Miner(BaseMinerNeuron):
     async def forward(
         self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
     ) -> quasar.protocol.BenchmarkEvaluationSynapse:
-        print(f"\n📨 [MINER] >>> RECEIVED SYNAPSE: {synapse.task_id} <<<")
         """
         Processes the incoming 'synapse' object by generating a response to the prompt 
         given the context.

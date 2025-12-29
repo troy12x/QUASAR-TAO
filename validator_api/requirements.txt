@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+requests
+bittensor
+# Add any specific benchmark parsers if loaded by API
+rouge
+jieba
+fuzzywuzzy
+python-Levenshtein
+datasets

@@ -4,7 +4,11 @@ import time
 import json
 import hashlib
 
+import sys
+
 API_URL = "http://localhost:8000"
+if len(sys.argv) > 1:
+    API_URL = sys.argv[1]
 
 def test_api():
     # 1. Setup mock wallet

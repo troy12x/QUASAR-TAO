@@ -196,16 +196,12 @@ class Validator(BaseValidatorNeuron):
 
     async def forward(self):
         """Main Validation Loop"""
-        print("\n🎬 [VALIDATOR] >>> NEW FORWARD STEP STARTED <<<")
         bt.logging.info("➡️ Entering forward loop...")
         try:
             async with self.semaphore: # Limit concurrency
                 # 1. Task Gen (Fetch from API)
-                print("🔍 [VALIDATOR] Step 1: Fetching task from API...")
-                start_fetch = time.time()
                 max_ctx = getattr(self.config.neuron, 'max_context_length', None)
                 api_task = self._call_api("get_task", params={"max_context_length": max_ctx})
-                print(f"✅ [VALIDATOR] Task fetch took: {time.time() - start_fetch:.2f}s")
                 
                 if not api_task:
                     print("⚠️ Failed to fetch task from API, falling back to local generation...")
@@ -250,8 +246,6 @@ class Validator(BaseValidatorNeuron):
                 print(f"📡 [VALIDATOR] Sending Light Synapse (context=None, prompt=None) to {len(miner_uids)} miners...")
                 print(f"📊 [VALIDATOR] Synapse ID: {synapse.task_id} | Task Type: {synapse.task_type}")
                 
-                print(f"📡 [VALIDATOR] Step 2: Querying {len(miner_uids)} miners...")
-                start_query = time.time()
                 try:
                     responses = await self.dendrite(
                         axons=[self.metagraph.axons[uid] for uid in miner_uids],
@@ -259,7 +253,6 @@ class Validator(BaseValidatorNeuron):
                         deserialize=False, # We want the full synapse object for metadata and .response
                         timeout=3600 # 1 hour timeout to allow for very long generation
                     )
-                    print(f"✅ [VALIDATOR] Miner query took: {time.time() - start_query:.2f}s")
                 except Exception as e:
                     print(f"❌ [VALIDATOR] Dendrite error details: {type(e).__name__} - {str(e)}")
                     if "ServerDisconnectedError" in str(e) or "Disconnected" in str(e):
@@ -269,10 +262,7 @@ class Validator(BaseValidatorNeuron):
                     return # Skip scoring for this failed round
 
                 # 4. Scoring
-                print("⚖️ [VALIDATOR] Step 3: Scoring responses...")
-                start_scoring = time.time()
                 rewards = self.score_responses(task, responses, miner_uids)
-                print(f"✅ [VALIDATOR] Scoring took: {time.time() - start_scoring:.2f}s")
                 
                 # Log individual metrics for transparency
                 if rewards:

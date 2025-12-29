@@ -137,9 +137,7 @@ class BaseValidatorNeuron(BaseNeuron):
         """
 
         # Check that validator is registered on the network.
-        print("🔍 [VALIDATOR] Pre-running initial sync...")
         self.sync()
-        print("✅ [VALIDATOR] Initial sync complete.")
 
         bt.logging.info(f"Validator starting at block: {self.block}")
 

@@ -59,7 +59,7 @@ def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get
     print(f"📤 [GET_TASK] Generated task: {task.task_id} (len: {task.context_length})")
     
     # Store in DB
-    start_db = time.time()
+    # Store in DB
     db_task = models.Task(
         id=task.task_id,
         dataset_name=task.dataset_name,
@@ -74,7 +74,6 @@ def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
-    print(f"✅ [GET_TASK] Saved to DB in {time.time() - start_db:.2f}s")
     
     # Return with list formatted metrics
     return models.TaskResponse(
