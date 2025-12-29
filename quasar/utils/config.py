@@ -143,6 +143,13 @@ def add_args(cls, parser):
     )
 
     parser.add_argument(
+        "--api_root",
+        type=str,
+        help="The root URL for the Validator API.",
+        default="http://localhost:8000",
+    )
+
+    parser.add_argument(
         "--neuron.dont_save_events",
         action="store_true",
         help="If set, we dont save events to a log file.",
@@ -351,49 +358,6 @@ def add_validator_args(cls, parser):
         default=False,
     )
 
-    # Validator-specific architecture arguments
-    parser.add_argument(
-        "--validator.enable_architecture_diversity_tracking",
-        action="store_true",
-        help="Enable tracking of architecture diversity among miners",
-        default=True
-    )
-
-    parser.add_argument(
-        "--validator.perturbation_testing_frequency",
-        type=float,
-        help="Frequency of perturbation testing (0.0 to 1.0)",
-        default=0.2
-    )
-
-    parser.add_argument(
-        "--validator.consensus_threshold",
-        type=float,
-        help="Threshold for consensus validation",
-        default=0.9
-    )
-
-    parser.add_argument(
-        "--validator.enable_audit_logging",
-        action="store_true",
-        help="Enable comprehensive audit logging",
-        default=True
-    )
-
-    parser.add_argument(
-        "--validator.benchmark_rotation_schedule",
-        type=str,
-        help="Schedule for rotating between different benchmarks",
-        default="round_robin",
-        choices=["round_robin", "random", "weighted"]
-    )
-
-    parser.add_argument(
-        "--validator.diversity_bonus_weight",
-        type=float,
-        help="Weight for diversity bonus in scoring",
-        default=0.1
-    )
 
 
 

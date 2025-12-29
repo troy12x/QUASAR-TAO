@@ -175,7 +175,7 @@ class Validator(BaseValidatorNeuron):
         hotkey = self.wallet.hotkey.ss58_address
         return f"0x{self.wallet.hotkey.sign(hotkey).hex()}"
 
-    def _call_api(self, endpoint: str, method: str = "GET", data: dict = None) -> Union[dict, None]:
+    def _call_api(self, endpoint: str, method: str = "GET", data: dict = None, params: dict = None) -> Union[dict, None]:
         """Helper to call the Validator API with authentication headers."""
         url = f"{self.api_root}/{endpoint.lstrip('/')}"
         headers = {
@@ -184,9 +184,9 @@ class Validator(BaseValidatorNeuron):
         }
         try:
             if method == "GET":
-                response = requests.get(url, headers=headers, timeout=10)
+                response = requests.get(url, headers=headers, params=params, timeout=120)
             else:
-                response = requests.post(url, headers=headers, json=data, timeout=10)
+                response = requests.post(url, headers=headers, json=data, timeout=120)
             
             response.raise_for_status()
             return response.json()
@@ -196,13 +196,17 @@ class Validator(BaseValidatorNeuron):
 
     async def forward(self):
         """Main Validation Loop"""
-        print("➡️ Entering forward loop heartbeat...")
+        print("\n🎬 [VALIDATOR] >>> NEW FORWARD STEP STARTED <<<")
         bt.logging.info("➡️ Entering forward loop...")
         try:
             async with self.semaphore: # Limit concurrency
                 # 1. Task Gen (Fetch from API)
-                print("🔍 Fetching task from API...")
-                api_task = self._call_api("get_task")
+                print("🔍 [VALIDATOR] Step 1: Fetching task from API...")
+                start_fetch = time.time()
+                max_ctx = getattr(self.config.neuron, 'max_context_length', None)
+                api_task = self._call_api("get_task", params={"max_context_length": max_ctx})
+                print(f"✅ [VALIDATOR] Task fetch took: {time.time() - start_fetch:.2f}s")
+                
                 if not api_task:
                     print("⚠️ Failed to fetch task from API, falling back to local generation...")
                     task = self.get_task()
@@ -210,10 +214,10 @@ class Validator(BaseValidatorNeuron):
                     # Adapt API task to the local Task object format
                     # (Assuming the API returns a compatible structure or we wrap it)
                     from types import SimpleNamespace
+                    # Map 'id' from API to 'task_id' for validator compatibility
+                    if 'id' in api_task and 'task_id' not in api_task:
+                        api_task['task_id'] = api_task['id']
                     task = SimpleNamespace(**api_task)
-                    # We might need to ensure 'context', 'prompt', etc. are populated
-                    # If the API doesn't provide the FULL task, we might need a local task pool
-                    # that matches the task_id. For now, we assume the API provides enough info.
                     if not hasattr(task, 'context'):
                         print("⚠️ API task missing details, using local generator with API task_id...")
                         local_task = self.get_task()
@@ -235,21 +239,40 @@ class Validator(BaseValidatorNeuron):
                     task_id=task.task_id,
                     task_type=task.task_type,
                     dataset_name=task.dataset_name,
-                    context=task.context,
-                    prompt=task.prompt,
+                    # Light Synapse: Omit context and prompt to reduce bandwidth.
+                    # Miners will fetch these details from the Validator API.
+                    context=None,
+                    prompt=None,
                     difficulty_level=task.difficulty_level,
                     evaluation_metrics=None # Trigger post_init logic correctly
                 )
                 
-                responses = await self.dendrite(
-                    axons=[self.metagraph.axons[uid] for uid in miner_uids],
-                    synapse=synapse,
-                    deserialize=False, # We want the full synapse object for metadata and .response
-                    timeout=3600 # 1 hour timeout to allow for very long generation
-                )
+                print(f"📡 [VALIDATOR] Sending Light Synapse (context=None, prompt=None) to {len(miner_uids)} miners...")
+                print(f"📊 [VALIDATOR] Synapse ID: {synapse.task_id} | Task Type: {synapse.task_type}")
+                
+                print(f"📡 [VALIDATOR] Step 2: Querying {len(miner_uids)} miners...")
+                start_query = time.time()
+                try:
+                    responses = await self.dendrite(
+                        axons=[self.metagraph.axons[uid] for uid in miner_uids],
+                        synapse=synapse,
+                        deserialize=False, # We want the full synapse object for metadata and .response
+                        timeout=3600 # 1 hour timeout to allow for very long generation
+                    )
+                    print(f"✅ [VALIDATOR] Miner query took: {time.time() - start_query:.2f}s")
+                except Exception as e:
+                    print(f"❌ [VALIDATOR] Dendrite error details: {type(e).__name__} - {str(e)}")
+                    if "ServerDisconnectedError" in str(e) or "Disconnected" in str(e):
+                        bt.logging.warning(f"📡 Miner connection dropped (ServerDisconnectedError). Likely due to extreme context length.")
+                    else:
+                        bt.logging.error(f"❌ Dendrite error: {e}")
+                    return # Skip scoring for this failed round
 
                 # 4. Scoring
+                print("⚖️ [VALIDATOR] Step 3: Scoring responses...")
+                start_scoring = time.time()
                 rewards = self.score_responses(task, responses, miner_uids)
+                print(f"✅ [VALIDATOR] Scoring took: {time.time() - start_scoring:.2f}s")
                 
                 # Log individual metrics for transparency
                 if rewards:
@@ -376,6 +399,7 @@ class Validator(BaseValidatorNeuron):
                 self.consecutive_failures[uid] += 1
                 failure_penalty = PENALTY_NO_RESPONSE - (0.1 * self.consecutive_failures[uid]) # Escalating penalty
                 raw_scores.append(failure_penalty)
+                raw_accuracies.append(0.0)
                 continue
             
             # Reset failures if successful response
@@ -414,6 +438,7 @@ class Validator(BaseValidatorNeuron):
             except Exception as e:
                 bt.logging.error(f"Scoring error for {uid}: {e}")
                 raw_scores.append(0.0)
+                raw_accuracies.append(0.0)
 
         # Store raw accuracy for logging
         self.last_raw_accuracies = raw_accuracies
@@ -434,6 +459,9 @@ class Validator(BaseValidatorNeuron):
 
     def _extract_answer(self, text: str) -> Tuple[Union[float, None], str]:
         """Extract numeric answer from text, handling \\boxed{} and CoT. Returns (value, method)."""
+        if text is None:
+            return None, "none(empty)"
+            
         try:
             import re
             text = text.strip()
@@ -450,7 +478,8 @@ class Validator(BaseValidatorNeuron):
             return None, "none"
         except Exception as e:
             bt.logging.error(f"❌ Answer extraction error: {e}")
-            bt.logging.error(f"   Text snippet: {text[:200]}...")
+            if text:
+                bt.logging.error(f"   Text snippet: {text[:200]}...")
             return None, f"error({str(e)[:50]})"
 
     def update_scores(self, rewards, miner_uids, bucket_name):

@@ -87,14 +87,18 @@ class BaseNeuron(ABC):
 
         # The wallet holds the cryptographic key pairs for the miner.
         if self.config.mock:
+            print("🔍 [BaseNeuron] Initializing MockWallet...")
             bt.logging.info("📝 Using mock wallet and subtensor...")
             self.wallet = MockWallet(config=self.config)
+            print("🔍 [BaseNeuron] Initializing MockSubtensor...")
             self.subtensor = MockSubtensor(
                 self.config.netuid, wallet=self.wallet
             )
+            print("🔍 [BaseNeuron] Initializing MockMetagraph...")
             self.metagraph = MockMetagraph(
                 self.config.netuid, subtensor=self.subtensor
             )
+            print("✅ [BaseNeuron] Mock components initialized.")
         else:
             bt.logging.info("💼 Creating wallet...")
             self.wallet = bt.Wallet(config=self.config)
@@ -114,12 +118,15 @@ class BaseNeuron(ABC):
             bt.logging.info(f"✅ Metagraph downloaded in {time.time() - start:.2f}s")
             bt.logging.info(f"   Metagraph has {len(self.metagraph.hotkeys)} neurons")
 
+        print("🔍 [BaseNeuron] Displaying objects...")
         bt.logging.info(f"📋 Wallet: {self.wallet}")
         bt.logging.info(f"📋 Subtensor: {self.subtensor} (Type: {type(self.subtensor)})")
         bt.logging.info(f"📋 Metagraph: {self.metagraph}")
 
         # Check if the miner is registered on the Bittensor network before proceeding further.
+        print("🔍 [BaseNeuron] Checking registration...")
         self.check_registered()
+        print("✅ [BaseNeuron] Registration check complete.")
 
         # Each miner gets a unique identity (UID) in the network for differentiation.
         self.uid = self.metagraph.hotkeys.index(

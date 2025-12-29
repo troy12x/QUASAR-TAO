@@ -151,7 +151,7 @@ class InfiniteContextSynapse(bt.Synapse):
     memory_retention_score: Optional[float] = None
     processing_time: Optional[float] = None
     context_length: Optional[int] = None
-    model_config: Optional[Dict[str, Any]] = None
+    quasar_model_config: Optional[Dict[str, Any]] = None
     
     # Performance metrics
     tokens_per_second: Optional[float] = None
@@ -185,11 +185,11 @@ class InfiniteContextSynapse(bt.Synapse):
     evaluation_breakdown: Optional[Dict[str, Any]] = None
     
     # Model information
-    model_info: Optional[Dict[str, Any]] = None
+    quasar_model_info: Optional[Dict[str, Any]] = None
     
     # Architecture support fields (unified architecture support)
     architecture_type: Optional[str] = None  # "quasar", "standard"
-    model_configuration: Optional[Dict[str, Any]] = None  # Architecture-specific configuration
+    quasar_model_configuration: Optional[Dict[str, Any]] = None  # Architecture-specific configuration
     architecture_preference: Optional[str] = None  # Preferred architecture for this task
     
     # Architecture-specific performance metrics
@@ -197,7 +197,7 @@ class InfiniteContextSynapse(bt.Synapse):
     
     # Audit and hash fields for sealed scoring harness
     logit_hash: Optional[str] = None  # Hash of model logits for audit verification
-    model_signature: Optional[str] = None  # Signature of model configuration
+    quasar_model_signature: Optional[str] = None  # Signature of model configuration
     audit_trail: Optional[List[str]] = None  # Audit trail entries
     response_hash: Optional[str] = None  # Hash of response content
     evaluation_timestamp: Optional[float] = None  # Timestamp of evaluation
@@ -231,7 +231,7 @@ class InfiniteContextSynapse(bt.Synapse):
             "memory_retention_score": self.memory_retention_score,
             "processing_time": self.processing_time,
             "context_length": self.context_length,
-            "model_config": self.model_config,
+            "quasar_model_config": self.quasar_model_config,
             "tokens_per_second": self.tokens_per_second,
             "memory_usage_mb": self.memory_usage_mb,
             "checkpoint_count": self.checkpoint_count,
@@ -263,15 +263,15 @@ class InfiniteContextSynapse(bt.Synapse):
             "retrieval_recall": self.retrieval_recall,
             "per_item_scores": self.per_item_scores,
             "evaluation_breakdown": self.evaluation_breakdown,
-            "model_info": self.model_info,
+            "quasar_model_info": self.quasar_model_info,
             # Architecture support information
             "architecture_type": self.architecture_type,
-            "model_configuration": self.model_configuration,
+            "quasar_model_configuration": self.quasar_model_configuration,
             "architecture_preference": self.architecture_preference,
             "quasar_checkpoint_count": self.quasar_checkpoint_count,
             # Audit and hash information
             "logit_hash": self.logit_hash,
-            "model_signature": self.model_signature,
+            "quasar_model_signature": self.quasar_model_signature,
             "audit_trail": self.audit_trail,
             "response_hash": self.response_hash,
             "evaluation_timestamp": self.evaluation_timestamp,
@@ -434,8 +434,8 @@ class InfiniteContextSynapse(bt.Synapse):
             return False
         
         # Validate architecture-specific configuration
-        if self.model_configuration:
-            if self.architecture_type == "hybrid" and "components" not in self.model_configuration:
+        if self.quasar_model_configuration:
+            if self.architecture_type == "hybrid" and "components" not in self.quasar_model_configuration:
                 return False
         
         return True
@@ -586,8 +586,8 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
     task_id: str
     task_type: str  # "longbench", "hotpotqa", "govreport", "needle_haystack", "synthetic"
     dataset_name: str
-    context: str
-    prompt: str
+    context: Optional[str] = None
+    prompt: Optional[str] = None
     max_tokens: int = 200
     
     # Task metadata (enhanced)
@@ -644,9 +644,9 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
     evaluation_breakdown: Optional[Dict[str, Any]] = None
     
     # Model information (enhanced)
-    model_architecture: Optional[str] = None  # "quasar", "standard"
-    model_configuration: Optional[Dict[str, Any]] = None
-    model_signature: Optional[str] = None  # For audit trails
+    quasar_model_architecture: Optional[str] = None  # "quasar", "standard"
+    quasar_model_configuration: Optional[Dict[str, Any]] = None
+    quasar_model_signature: Optional[str] = None  # For audit trails
     
     # Audit and hash fields for sealed scoring harness
     logit_hash: Optional[str] = None  # Hash of model logits for audit verification
@@ -739,9 +739,9 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
             "evaluation_breakdown": self.evaluation_breakdown,
             
             # Model information (enhanced)
-            "model_architecture": self.model_architecture,
-            "model_configuration": self.model_configuration,
-            "model_signature": self.model_signature,
+            "quasar_model_architecture": self.quasar_model_architecture,
+            "quasar_model_configuration": self.quasar_model_configuration,
+            "quasar_model_signature": self.quasar_model_signature,
             
             # Audit and hash information
             "logit_hash": self.logit_hash,

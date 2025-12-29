@@ -8,6 +8,7 @@ from typing import Optional, List, Any, Dict
 from pydantic import Field
 import torch
 import bittensor as bt
+import psutil
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Add the parent directory to path so we can import quasar
@@ -49,6 +50,10 @@ class Miner(BaseMinerNeuron):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         bt.logging.info(f"Using device: {self.device}")
         
+        # API Configuration
+        self.api_root = getattr(self.config, 'api_root', "http://localhost:8000")
+        bt.logging.info(f"🌐 Validator API Root: {self.api_root}")
+        
         # Get model name from config or use default
         self.model_name = getattr(self.config.miner, 'model_name', "silx-ai/Quasar-2M-Base")
         
@@ -75,6 +80,13 @@ class Miner(BaseMinerNeuron):
             self.max_length = getattr(self.config.miner, 'max_length', 
                                      getattr(self.model.config, 'max_position_embeddings', 32768))
             bt.logging.info(f"Miner max length set to: {self.max_length}")
+            
+            # Log device map for debugging
+            if hasattr(self.model, 'hf_device_map'):
+                print(f"🗺️ Model Device Map: {self.model.hf_device_map}")
+            else:
+                print(f"🗺️ Model Device: {self.model.device}")
+                
             self.model.eval()
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
         except Exception as e:
@@ -85,6 +97,7 @@ class Miner(BaseMinerNeuron):
     async def forward(
         self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
     ) -> quasar.protocol.BenchmarkEvaluationSynapse:
+        print(f"\n📨 [MINER] >>> RECEIVED SYNAPSE: {synapse.task_id} <<<")
         """
         Processes the incoming 'synapse' object by generating a response to the prompt 
         given the context.
@@ -96,14 +109,25 @@ class Miner(BaseMinerNeuron):
         start_time = time.time()
         
         try:
-            # Extract inputs
-            # The previous miner used `synapse.context` (which might be huge) + prompt logic?
-            # Existing miner code: `context = getattr(synapse, 'context', '')`
-            
+            # 1. Check if we need to fetch context from API (Light Synapse)
             context = getattr(synapse, 'context', '')
-            prompt = getattr(synapse, 'prompt', '') # LongBench usually has a specific question/prompt
+            prompt = getattr(synapse, 'prompt', '')
             
-            print(f"\n[MINER] 📝 Received Task:")
+            if not context or not prompt:
+                print(f"📡 [MINER] Light Synapse detected for task {synapse.task_id}. Fetching details from API...")
+                bt.logging.info(f"📡 Fetching task details for {synapse.task_id} from API...")
+                api_details = self._call_api(f"get_task_details/{synapse.task_id}")
+                if api_details:
+                    context = api_details.get('context', '')
+                    prompt = api_details.get('prompt', '')
+                    print(f"✅ [MINER] Context successfully retrieved ({len(context)} chars) from API.")
+                    bt.logging.info(f"✅ Fetched task details from API.")
+                else:
+                    print(f"❌ [MINER] Failed to fetch task details from API!")
+                    bt.logging.error(f"❌ Failed to fetch task details for {synapse.task_id}")
+                    # We continue, but it will likely fail generation or be empty
+            
+            print(f"\n[MINER] 📝 Received Task: {synapse.task_id}")
             print(f"[MINER] Prompt: {prompt}")
             print(f"[MINER] Context Length: {len(context)} characters")
             bt.logging.info(f"📨 Received request. Context len: {len(context)} chars")
@@ -140,20 +164,27 @@ IMPORTANT: After showing your work, you MUST format your final answer as \\boxed
                 add_generation_prompt=True
             )
             
+            self._log_memory_usage("Before Tokenization")
+            
             model_inputs = self.tokenizer(
                 [text_input], 
                 return_tensors="pt",
                 truncation=True,
                 max_length=self.max_length
             ).to(self.device)
-
+            
+            self._log_memory_usage("After Tokenization / Before Generate")
+            
             # Generate
             with torch.no_grad():
                 generated_ids = self.model.generate(
                     model_inputs.input_ids,
-                    max_new_tokens=32000, # Increased to 32k to prevent ANY truncation
-                    do_sample=False, 
-                    temperature=0.1
+                    attention_mask=model_inputs.attention_mask,
+                    max_new_tokens=64, # Optimized for testing, but enough for reasoning
+                    do_sample=True,      # Enable sampling for temperature to be valid
+                    temperature=0.1,
+                    top_p=0.9,
+                    pad_token_id=self.tokenizer.eos_token_id
                 )
             
             generated_ids = [
@@ -173,8 +204,10 @@ IMPORTANT: After showing your work, you MUST format your final answer as \\boxed
                 torch.cuda.empty_cache()
             
             # Fill other metadata if required by protocol
-            if hasattr(synapse, 'model_name'):
-                synapse.model_name = self.model_name
+            if hasattr(synapse, 'quasar_model_architecture'):
+                synapse.quasar_model_architecture = self.model_name
+            if hasattr(synapse, 'quasar_model_configuration'):
+                synapse.quasar_model_configuration = {"max_length": self.max_length}
                 
         except Exception as e:
             bt.logging.error(f"❌ Error during generation: {e}")
@@ -210,6 +243,42 @@ IMPORTANT: After showing your work, you MUST format your final answer as \\boxed
             f"Prioritizing {synapse.dendrite.hotkey} with value: {prirority}"
         )
         return prirority
+
+    def _get_signature(self) -> str:
+        """Sign the hotkey address to authenticate with the API."""
+        hotkey = self.wallet.hotkey.ss58_address
+        return f"0x{self.wallet.hotkey.sign(hotkey).hex()}"
+
+    def _call_api(self, endpoint: str, method: str = "GET", data: dict = None) -> typing.Union[dict, None]:
+        """Helper to call the Validator API with authentication headers."""
+        url = f"{self.api_root}/{endpoint.lstrip('/')}"
+        headers = {
+            "Hotkey": self.wallet.hotkey.ss58_address,
+            "Signature": self._get_signature()
+        }
+        try:
+            import requests
+            if method == "GET":
+                response = requests.get(url, headers=headers, timeout=120)
+            else:
+                response = requests.post(url, headers=headers, json=data, timeout=120)
+            
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            bt.logging.error(f"❌ API Call Error ({endpoint}): {e}")
+            return None
+
+    def _log_memory_usage(self, stage: str):
+        """Log current RAM and GPU memory usage."""
+        process = psutil.Process(os.getpid())
+        ram_usage = process.memory_info().rss / (1024 * 1024)  # MB
+        bt.logging.info(f"💾 [MEMORY] {stage} | RAM: {ram_usage:.2f} MB")
+        
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                mem = torch.cuda.memory_reserved(i) / (1024 * 1024)
+                bt.logging.info(f"💾 [MEMORY] {stage} | GPU {i}: {mem:.2f} MB")
 
 # This is the main function, which runs the miner.
 if __name__ == "__main__":

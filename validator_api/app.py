@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional, Dict
 import uuid
 import sys
 import os
 import random
+import time
 
 # Add parent directory to path to import quasar
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,8 +17,10 @@ import quasar
 from quasar.benchmarks.benchmark_loader import BenchmarkLoader
 
 import hashlib
-from . import models, auth, scoring
-from .database import engine, get_db
+import models
+import auth
+import scoring
+from database import engine, get_db
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
@@ -25,31 +28,38 @@ models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Quasar Validator API")
 
 # Initialize BenchmarkLoader
+print("🔄 Initializing BenchmarkLoader in API...")
 loader = BenchmarkLoader(config={
     'mrcr': {
         'enabled': True,
         'n_needles_range': [2, 4, 8]
     }
 })
+print("✅ BenchmarkLoader ready.")
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
 @app.get("/get_task", response_model=models.TaskResponse)
-def get_task(db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
+def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
     """
     Generates a new production task using BenchmarkLoader.
     """
+    print(f"📥 [GET_TASK] Request from {hotkey[:8]}... (max_ctx: {max_context_length})")
     difficulty = random.choice(["easy", "medium", "hard", "extreme"])
-    tasks = loader.load_benchmark_tasks(1, benchmark_types=['longbench'], difficulty=difficulty)
+    print(f"🎲 [GET_TASK] Selected difficulty: {difficulty}")
+    tasks = loader.load_benchmark_tasks(1, benchmark_types=['longbench'], difficulty=difficulty, max_context_length=max_context_length)
     
     if not tasks:
+        print("❌ [GET_TASK] Failed to generate task!")
         raise HTTPException(status_code=500, detail="Failed to generate task")
     
     task = tasks[0]
+    print(f"📤 [GET_TASK] Generated task: {task.task_id} (len: {task.context_length})")
     
     # Store in DB
+    start_db = time.time()
     db_task = models.Task(
         id=task.task_id,
         dataset_name=task.dataset_name,
@@ -64,8 +74,34 @@ def get_task(db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_si
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
+    print(f"✅ [GET_TASK] Saved to DB in {time.time() - start_db:.2f}s")
     
     # Return with list formatted metrics
+    return models.TaskResponse(
+        id=db_task.id,
+        dataset_name=db_task.dataset_name,
+        task_type=db_task.task_type,
+        context=db_task.context,
+        prompt=db_task.prompt,
+        expected_output=db_task.expected_output,
+        context_length=db_task.context_length,
+        difficulty_level=db_task.difficulty_level,
+        evaluation_metrics=db_task.evaluation_metrics.split(",") if db_task.evaluation_metrics else [],
+        created_at=db_task.created_at
+    )
+
+@app.get("/get_task_details/{task_id}", response_model=models.TaskResponse)
+def get_task_details(task_id: str, db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
+    """
+    Returns the full details of a specific task.
+    Used by miners to fetch heavy context data.
+    """
+    print(f"📥 [GET_TASK_DETAILS] Request for {task_id} from {hotkey[:8]}...")
+    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not db_task:
+        print(f"❌ [GET_TASK_DETAILS] Task {task_id} not found!")
+        raise HTTPException(status_code=404, detail="Task not found")
+        
     return models.TaskResponse(
         id=db_task.id,
         dataset_name=db_task.dataset_name,
@@ -89,9 +125,11 @@ def report_result(
     Validators report miner responses to the API.
     The API performs authoritative scoring and duplicate detection.
     """
+    print(f"📥 [REPORT_RESULT] Task: {result_in.task_id} | Miner: {result_in.miner_hotkey[:8]} (UID: {result_in.miner_uid})")
     # 1. Fetch Task details
     db_task = db.query(models.Task).filter(models.Task.id == result_in.task_id).first()
     if not db_task:
+        print(f"❌ [REPORT_RESULT] Task {result_in.task_id} not found in DB")
         raise HTTPException(status_code=404, detail="Task not found")
 
     # 2. Calculate response hash if not provided
@@ -106,8 +144,10 @@ def report_result(
     
     if existing_result:
         if existing_result.miner_hotkey != result_in.miner_hotkey:
+            print(f"⚠️ [REPORT_RESULT] Duplicate response from different miner ({result_in.miner_hotkey[:8]})")
             return {"status": "rejected", "reason": "duplicate_response"}
         # If same miner, we'll just update or ignore (idempotent)
+        print(f"ℹ️ [REPORT_RESULT] Already reported by {result_in.miner_hotkey[:8]}")
         return {"status": "already_reported", "score": existing_result.score}
 
     # 4. Authoritative Scoring
@@ -140,6 +180,7 @@ def report_result(
         db_score.score = alpha * final_score + (1 - alpha) * db_score.score
     
     db.commit()
+    print(f"🎯 [REPORT_RESULT] Scored: {final_score:.4f} | Saved to DB.")
     return {"status": "reported", "score": final_score}
 
 @app.get("/get_scores", response_model=List[models.MinerScoreResponse])
