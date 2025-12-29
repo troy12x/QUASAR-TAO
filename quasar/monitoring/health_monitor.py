@@ -1,5 +1,5 @@
 # The MIT License (MIT)
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -95,7 +95,7 @@ class Alert:
 
 class HealthMonitor:
     """
-    Comprehensive health monitoring system for the unified HFA-SimpleMind subnet.
+    Comprehensive health monitoring system for the Quasar subnet.
     
     Monitors:
     - System resource health (CPU, memory, disk, GPU)

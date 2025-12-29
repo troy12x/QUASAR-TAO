@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 # Copyright © 2023 Yuma Rao
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -313,7 +313,7 @@ class PerturbationTester:
 
 class ScoringHarness:
     """
-    Sealed, auditable scoring system for the unified HFA-SimpleMind subnet.
+    Sealed, auditable scoring system for the Quasar subnet.
     
     This harness provides:
     - Deterministic scoring algorithms with audit trails

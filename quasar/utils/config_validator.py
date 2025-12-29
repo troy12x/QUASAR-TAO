@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 # Copyright © 2023 Yuma Rao
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -17,10 +17,9 @@
 # DEALINGS IN THE SOFTWARE.
 
 """
-Configuration Validation for Unified HFA-SimpleMind Subnet
+Configuration Validation for Quasar Subnet
 
-This module provides comprehensive validation for subnet configuration files,
-including support for multiple architectures and enhanced evaluation settings.
+This module provides comprehensive validation for subnet configuration files.
 """
 
 import json
@@ -31,28 +30,25 @@ import bittensor as bt
 
 class ConfigValidator:
     """
-    Validates configuration files for the unified subnet.
+    Validates configuration files for the Quasar subnet.
     
     Supports validation of:
-    - HFA configuration with multi-architecture support
-    - Subnet configuration with enhanced evaluation settings
-    - Model-specific configurations for each architecture type
+    - Quasar configuration
+    - Subnet configuration with evaluation settings
+    - Model-specific configurations
     """
     
-    SUPPORTED_ARCHITECTURES = ['hfa', 'simplemind', 'hybrid', 'standard']
+    SUPPORTED_ARCHITECTURES = ['deepseek_v32', 'kimi_linear', 'qwen3', 'qwen3_next']
     SUPPORTED_BENCHMARKS = ['longbench', 'hotpotqa_distractor', 'govreport', 'needle_in_haystack']
     SUPPORTED_PERTURBATION_TYPES = ['paraphrase', 'reorder', 'noise_injection']
-    SUPPORTED_MIXING_STRATEGIES = ['alternating', 'parallel', 'sequential']
-    SUPPORTED_ROUTER_TYPES = ['dynamic', 'static', 'learned']
-    SUPPORTED_AGGREGATION_TYPES = ['learnable', 'attention', 'weighted_sum']
     
     @classmethod
-    def validate_hfa_config(cls, config_path: str) -> Dict[str, Any]:
+    def validate_quasar_config(cls, config_path: str) -> Dict[str, Any]:
         """
-        Validate HFA configuration file.
+        Validate Quasar configuration file.
         
         Args:
-            config_path: Path to hfa_config.json file
+            config_path: Path to quasar_config.json file
             
         Returns:
             Validated configuration dictionary
@@ -62,29 +58,26 @@ class ConfigValidator:
             FileNotFoundError: If config file doesn't exist
         """
         if not os.path.exists(config_path):
-            raise FileNotFoundError(f"HFA config file not found: {config_path}")
+            raise FileNotFoundError(f"Quasar config file not found: {config_path}")
         
         try:
             with open(config_path, 'r') as f:
                 config = json.load(f)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in HFA config file: {e}")
+            raise ValueError(f"Invalid JSON in Quasar config file: {e}")
         
         # Validate required top-level fields
         required_fields = [
-            'model_name', 'max_context_length', 'architectures',
-            'model_selection', 'evaluation_metrics'
+            'model_name', 'max_context_length', 'model',
+            'evaluation_metrics'
         ]
         
         for field in required_fields:
             if field not in config:
                 raise ValueError(f"Missing required field in HFA config: {field}")
         
-        # Validate supported architectures
-        cls._validate_architectures(config['architectures'])
-        
-        # Validate model selection configuration
-        cls._validate_model_selection(config['model_selection'])
+        # Validate model configuration
+        cls._validate_model_config(config['model'])
         
         # Validate evaluation metrics
         cls._validate_evaluation_metrics(config['evaluation_metrics'])
@@ -97,7 +90,7 @@ class ConfigValidator:
             if not isinstance(config['memory_retention_target'], (int, float)) or config['memory_retention_target'] <= 0:
                 raise ValueError("memory_retention_target must be a positive number")
         
-        bt.logging.info(f"HFA configuration validated successfully: {config_path}")
+        bt.logging.info(f"Quasar configuration validated successfully: {config_path}")
         return config
     
     @classmethod
@@ -142,7 +135,8 @@ class ConfigValidator:
         
         # Validate architecture support if present
         if 'architecture_support' in config:
-            cls._validate_architecture_support(config['architecture_support'])
+            # Note: Legacy architectures are no longer restricted here
+            pass
         
         # Validate benchmark evaluation if present
         if 'benchmark_evaluation' in config:
@@ -167,100 +161,14 @@ class ConfigValidator:
         return config
     
     @classmethod
-    def _validate_architectures(cls, architectures_config: Dict[str, Any]):
-        """Validate supported architectures configuration."""
-        for arch_name, arch_config in architectures_config.items():
-            if arch_name not in cls.SUPPORTED_ARCHITECTURES:
-                raise ValueError(f"Unsupported architecture: {arch_name}")
-            
-            if not isinstance(arch_config, dict):
-                raise ValueError(f"Architecture config for {arch_name} must be a dictionary")
-            
-            if 'enabled' not in arch_config:
-                raise ValueError(f"Missing 'enabled' field for architecture: {arch_name}")
-            
-            if 'default_config' not in arch_config:
-                raise ValueError(f"Missing 'default_config' field for architecture: {arch_name}")
-            
-            # Validate architecture-specific default config
-            cls._validate_architecture_default_config(arch_name, arch_config['default_config'])
-    
-    @classmethod
-    def _validate_architecture_default_config(cls, arch_name: str, config: Dict[str, Any]):
-        """Validate default configuration for a specific architecture."""
-        # Common required fields
-        common_fields = ['vocab_size', 'd_model', 'max_seq_len']
-        for field in common_fields:
-            if field not in config:
-                raise ValueError(f"Missing required field '{field}' in {arch_name} default config")
-        
-        # Architecture-specific validation
-        if arch_name == 'hfa':
-            hfa_fields = ['num_layers', 'num_heads', 'd_ff']
-            for field in hfa_fields:
-                if field not in config:
-                    raise ValueError(f"Missing HFA field '{field}' in default config")
-        
-        elif arch_name == 'simplemind':
-            simplemind_fields = ['num_layers', 'num_channels', 'router_type', 'aggregation_type']
-            for field in simplemind_fields:
-                if field not in config:
-                    raise ValueError(f"Missing SimpleMind field '{field}' in default config")
-            
-            if config['router_type'] not in cls.SUPPORTED_ROUTER_TYPES:
-                raise ValueError(f"Unsupported router_type: {config['router_type']}")
-            
-            if config['aggregation_type'] not in cls.SUPPORTED_AGGREGATION_TYPES:
-                raise ValueError(f"Unsupported aggregation_type: {config['aggregation_type']}")
-        
-        elif arch_name == 'hybrid':
-            hybrid_fields = ['mixing_strategy', 'hfa_config', 'simplemind_config']
-            for field in hybrid_fields:
-                if field not in config:
-                    raise ValueError(f"Missing hybrid field '{field}' in default config")
-            
-            if config['mixing_strategy'] not in cls.SUPPORTED_MIXING_STRATEGIES:
-                raise ValueError(f"Unsupported mixing_strategy: {config['mixing_strategy']}")
-            
-            # Validate sub-configs (these don't need vocab_size as they're nested)
-            hfa_subconfig = config['hfa_config']
-            hfa_required = ['num_layers', 'num_heads', 'd_ff']
-            for field in hfa_required:
-                if field not in hfa_subconfig:
-                    raise ValueError(f"Missing HFA field '{field}' in hybrid hfa_config")
-            
-            simplemind_subconfig = config['simplemind_config']
-            simplemind_required = ['num_layers', 'num_channels', 'router_type', 'aggregation_type']
-            for field in simplemind_required:
-                if field not in simplemind_subconfig:
-                    raise ValueError(f"Missing SimpleMind field '{field}' in hybrid simplemind_config")
-        
-        elif arch_name == 'standard':
-            standard_fields = ['num_layers', 'num_heads', 'd_ff']
-            for field in standard_fields:
-                if field not in config:
-                    raise ValueError(f"Missing standard transformer field '{field}' in default config")
-    
-    @classmethod
-    def _validate_model_selection(cls, selection_config: Dict[str, Any]):
-        """Validate model selection configuration."""
-        required_fields = ['default_architecture', 'architecture_preference_order']
+    def _validate_model_config(cls, config: Dict[str, Any]):
+        """Validate Quasar model configuration."""
+        # Required fields
+        required_fields = ['vocab_size', 'd_model', 'max_seq_len', 'num_layers', 'num_heads', 'd_ff']
         for field in required_fields:
-            if field not in selection_config:
-                raise ValueError(f"Missing model selection field: {field}")
-        
-        # Validate default architecture
-        if selection_config['default_architecture'] not in cls.SUPPORTED_ARCHITECTURES:
-            raise ValueError(f"Invalid default_architecture: {selection_config['default_architecture']}")
-        
-        # Validate preference order
-        preference_order = selection_config['architecture_preference_order']
-        if not isinstance(preference_order, list):
-            raise ValueError("architecture_preference_order must be a list")
-        
-        for arch in preference_order:
-            if arch not in cls.SUPPORTED_ARCHITECTURES:
-                raise ValueError(f"Invalid architecture in preference order: {arch}")
+            if field not in config:
+                raise ValueError(f"Missing required field '{field}' in model config")
+    
     
     @classmethod
     def _validate_evaluation_metrics(cls, metrics: List[str]):
@@ -308,17 +216,6 @@ class ConfigValidator:
         if tests != sorted(tests):
             raise ValueError("context_length_tests should be in ascending order")
     
-    @classmethod
-    def _validate_architecture_support(cls, support_config: Dict[str, Any]):
-        """Validate architecture support configuration."""
-        if 'enabled_architectures' in support_config:
-            enabled = support_config['enabled_architectures']
-            if not isinstance(enabled, list):
-                raise ValueError("enabled_architectures must be a list")
-            
-            for arch in enabled:
-                if arch not in cls.SUPPORTED_ARCHITECTURES:
-                    raise ValueError(f"Unsupported architecture: {arch}")
     
     @classmethod
     def _validate_benchmark_evaluation(cls, benchmark_config: Dict[str, Any]):
@@ -375,10 +272,10 @@ class ConfigValidator:
         """
         configs = {}
         
-        # Validate HFA config
-        hfa_config_path = os.path.join(config_dir, 'hfa_config.json')
-        if os.path.exists(hfa_config_path):
-            configs['hfa'] = cls.validate_hfa_config(hfa_config_path)
+        # Validate Quasar config
+        quasar_config_path = os.path.join(config_dir, 'quasar_config.json')
+        if os.path.exists(quasar_config_path):
+            configs['quasar'] = cls.validate_quasar_config(quasar_config_path)
         
         # Validate subnet config
         subnet_config_path = os.path.join(config_dir, 'subnet_config.json')
@@ -389,29 +286,17 @@ class ConfigValidator:
         return configs
     
     @classmethod
-    def get_model_config(cls, hfa_config: Dict[str, Any], architecture_type: str) -> Dict[str, Any]:
+    def get_model_config(cls, quasar_config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Extract model configuration for a specific architecture from HFA config.
+        Extract model configuration from Quasar config.
         
         Args:
-            hfa_config: Validated HFA configuration
-            architecture_type: Type of architecture to get config for
+            quasar_config: Validated Quasar configuration
             
         Returns:
-            Model configuration dictionary for the specified architecture
+            Model configuration dictionary
         """
-        if architecture_type not in cls.SUPPORTED_ARCHITECTURES:
-            raise ValueError(f"Unsupported architecture type: {architecture_type}")
+        if 'model' not in quasar_config:
+            raise ValueError("Quasar config missing 'model' section")
         
-        if 'architectures' not in hfa_config:
-            raise ValueError("HFA config missing architectures section")
-        
-        if architecture_type not in hfa_config['architectures']:
-            raise ValueError(f"Architecture {architecture_type} not configured in HFA config")
-        
-        arch_config = hfa_config['architectures'][architecture_type]
-        
-        if not arch_config.get('enabled', False):
-            raise ValueError(f"Architecture {architecture_type} is not enabled")
-        
-        return arch_config['default_config'].copy()
+        return quasar_config['model'].copy()

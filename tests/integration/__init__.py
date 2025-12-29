@@ -1,1 +1,1 @@
-# Integration tests for the unified HFA-SimpleMind subnet
+# Integration tests for the Quasar subnet

@@ -1,5 +1,5 @@
 # The MIT License (MIT)
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -75,7 +75,7 @@ class SubnetMetrics:
 
 class TelemetryCollector:
     """
-    Comprehensive telemetry collection system for the unified HFA-SimpleMind subnet.
+    Comprehensive telemetry collection system for the Quasar subnet.
     
     Collects and aggregates:
     - System performance metrics (CPU, memory, disk, network, GPU)
@@ -397,7 +397,7 @@ class StructuredLogger:
         self.config = config or {}
         
         # Setup structured logging
-        self.logger = logging.getLogger(f"hfa_subnet.{component_name}")
+        self.logger = logging.getLogger(f"quasar.{component_name}")
         
         # Context tracking
         self.context_stack: List[Dict[str, Any]] = []

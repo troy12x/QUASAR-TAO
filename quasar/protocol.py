@@ -107,7 +107,7 @@ class BenchmarkTaskInfo:
 
 class InfiniteContextSynapse(bt.Synapse):
     """
-    HFA Infinite Context Protocol Synapse
+    Quasar Infinite Context Protocol Synapse
     
     This synapse enables evaluation of infinite context capabilities using the
     breakthrough Quasar architecture. It tests:
@@ -151,12 +151,12 @@ class InfiniteContextSynapse(bt.Synapse):
     memory_retention_score: Optional[float] = None
     processing_time: Optional[float] = None
     context_length: Optional[int] = None
-    hfa_model_config: Optional[Dict[str, Any]] = None
+    model_config: Optional[Dict[str, Any]] = None
     
     # Performance metrics
     tokens_per_second: Optional[float] = None
     memory_usage_mb: Optional[float] = None
-    checkpoint_count: Optional[int] = None  # Number of HFA checkpoints created
+    checkpoint_count: Optional[int] = None  # Number of Quasar checkpoints created
     
     # Quality metrics
     coherence_score: Optional[float] = None
@@ -194,7 +194,6 @@ class InfiniteContextSynapse(bt.Synapse):
     
     # Architecture-specific performance metrics
     quasar_checkpoint_count: Optional[int] = None  # Number of Quasar checkpoints created
-    architecture_switching_count: Optional[int] = None  # Number of architecture switches
     
     # Audit and hash fields for sealed scoring harness
     logit_hash: Optional[str] = None  # Hash of model logits for audit verification
@@ -232,7 +231,7 @@ class InfiniteContextSynapse(bt.Synapse):
             "memory_retention_score": self.memory_retention_score,
             "processing_time": self.processing_time,
             "context_length": self.context_length,
-            "hfa_model_config": self.hfa_model_config,
+            "model_config": self.model_config,
             "tokens_per_second": self.tokens_per_second,
             "memory_usage_mb": self.memory_usage_mb,
             "checkpoint_count": self.checkpoint_count,
@@ -269,10 +268,7 @@ class InfiniteContextSynapse(bt.Synapse):
             "architecture_type": self.architecture_type,
             "model_configuration": self.model_configuration,
             "architecture_preference": self.architecture_preference,
-            "hfa_checkpoint_count": self.hfa_checkpoint_count,
-            "simplemind_block_count": self.simplemind_block_count,
-            "hybrid_component_usage": self.hybrid_component_usage,
-            "architecture_switching_count": self.architecture_switching_count,
+            "quasar_checkpoint_count": self.quasar_checkpoint_count,
             # Audit and hash information
             "logit_hash": self.logit_hash,
             "model_signature": self.model_signature,
@@ -433,7 +429,7 @@ class InfiniteContextSynapse(bt.Synapse):
         if not self.architecture_type:
             return True  # Architecture type is optional
         
-        valid_architectures = ["hfa", "simplemind", "hybrid", "standard"]
+        valid_architectures = ["quasar", "standard"]
         if self.architecture_type not in valid_architectures:
             return False
         
@@ -454,16 +450,9 @@ class InfiniteContextSynapse(bt.Synapse):
             "context_length": self.context_length or 0
         }
         
-        if self.architecture_type == "hfa":
-            complexity_info["checkpoint_count"] = self.hfa_checkpoint_count or 0
+        if self.architecture_type == "quasar":
+            complexity_info["checkpoint_count"] = self.quasar_checkpoint_count or 0
             complexity_info["complexity"] = "O(n log n)"
-        elif self.architecture_type == "simplemind":
-            complexity_info["block_count"] = self.simplemind_block_count or 0
-            complexity_info["complexity"] = "O(n)"
-        elif self.architecture_type == "hybrid":
-            complexity_info["component_usage"] = self.hybrid_component_usage or {}
-            complexity_info["switching_count"] = self.architecture_switching_count or 0
-            complexity_info["complexity"] = "O(n log n) + O(n)"
         else:  # standard
             complexity_info["complexity"] = "O(n²)"
         
@@ -655,7 +644,7 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
     evaluation_breakdown: Optional[Dict[str, Any]] = None
     
     # Model information (enhanced)
-    model_architecture: Optional[str] = None  # "hfa", "simplemind", "hybrid", "standard"
+    model_architecture: Optional[str] = None  # "quasar", "standard"
     model_configuration: Optional[Dict[str, Any]] = None
     model_signature: Optional[str] = None  # For audit trails
     

@@ -1,5 +1,5 @@
 # The MIT License (MIT)
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -80,7 +80,7 @@ class DiagnosticCheck:
 
 class DiagnosticSystem:
     """
-    Comprehensive diagnostic system for the unified HFA-SimpleMind subnet.
+    Comprehensive diagnostic system for the Quasar subnet.
     
     Provides automated diagnostics for:
     - System configuration and dependencies
@@ -165,21 +165,6 @@ class DiagnosticSystem:
             "Check subnet registration status",
             self._check_subnet_registration,
             "network"
-        )
-        
-        # Model checks
-        self.register_check(
-            "model_loading",
-            "Test model loading capabilities",
-            self._check_model_loading,
-            "models"
-        )
-        
-        self.register_check(
-            "inference_test",
-            "Test basic inference functionality",
-            self._check_inference_test,
-            "models"
         )
         
         # Performance checks
@@ -376,7 +361,7 @@ class DiagnosticSystem:
         """Format diagnostic report as text"""
         lines = []
         lines.append("=" * 80)
-        lines.append("UNIFIED HFA-SIMPLEMIND SUBNET DIAGNOSTIC REPORT")
+        lines.append("QUASAR SUBNET DIAGNOSTIC REPORT")
         lines.append("=" * 80)
         lines.append(f"Generated: {datetime.fromtimestamp(report_data['timestamp']).isoformat()}")
         lines.append("")
@@ -538,7 +523,7 @@ class DiagnosticSystem:
     def _check_config_files(self) -> DiagnosticResult:
         """Check configuration file validity"""
         config_files = [
-            "hfa_config.json",
+            "quasar_config.json",
             "subnet_config.json"
         ]
         
@@ -618,29 +603,6 @@ class DiagnosticSystem:
             message="Subnet registration checking not implemented yet",
             details={}
         )
-    
-    def _check_model_loading(self) -> DiagnosticResult:
-        """Test model loading capabilities"""
-        try:
-            # Try to import model factory
-            from quasar.model_factory import ModelArchitectureFactory
-            
-            factory = ModelArchitectureFactory()
-            
-            return DiagnosticResult(
-                name="model_loading",
-                status="pass",
-                message="Model factory initialized successfully",
-                details={"available_architectures": factory.get_available_architectures()}
-            )
-            
-        except Exception as e:
-            return DiagnosticResult(
-                name="model_loading",
-                status="fail",
-                message=f"Model loading test failed: {str(e)}",
-                details={"error": str(e)}
-            )
     
     def _check_inference_test(self) -> DiagnosticResult:
         """Test basic inference functionality"""

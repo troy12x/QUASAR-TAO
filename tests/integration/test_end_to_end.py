@@ -1,5 +1,5 @@
 # The MIT License (MIT)
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -28,19 +28,16 @@ import threading
 import bittensor as bt
 
 # Import subnet components
-from quasar.model_factory import ModelArchitectureFactory
-from quasar.models.hfa_model import HFAModel
-from quasar.models.simplemind_model import SimpleMindModel
-from quasar.models.hybrid_model import HybridModel
-from quasar.validator.diversity_tracker import DiversityTracker
+from quasar.validator.scoring_harness import ScoringHarness
 from quasar.validator.scoring_harness import ScoringHarness
 from quasar.monitoring import (
     TelemetryCollector, HealthMonitor, AlertManager, 
     DiagnosticSystem, AuditTrailManager
 )
 from benchmarks.benchmark_loader import BenchmarkLoader
-from neurons.miner import HFAMiner
-from neurons.validator import HFAValidator
+from benchmarks.benchmark_loader import BenchmarkLoader
+from neurons.miner import Miner
+from neurons.validator import Validator
 import quasar.protocol as protocol
 
 
@@ -67,7 +64,7 @@ class IntegrationTestEnvironment:
                 "hotkey": "test_hotkey"
             },
             "model_config": {
-                "architecture": "hfa",
+                "architecture": "standard",
                 "model_name": "test_model",
                 "max_context_length": 4096
             },
@@ -98,7 +95,7 @@ class IntegrationTestEnvironment:
         self.mock_wallet = Mock()
         self.mock_wallet.hotkey.ss58_address = "test_hotkey_address"
         
-    def create_test_miner(self, architecture: str = "hfa") -> HFAMiner:
+    def create_test_miner(self, architecture: str = "standard") -> Miner:
         """Create a test miner instance"""
         config = self.config.copy()
         config["model_config"]["architecture"] = architecture
@@ -108,21 +105,21 @@ class IntegrationTestEnvironment:
             with patch('bittensor.wallet') as mock_wallet_class:
                 mock_wallet_class.return_value = self.mock_wallet
                 
-                miner = HFAMiner(config=config)
+                miner = Miner(config=config)
                 miner.metagraph = self.mock_metagraph
                 miner.subtensor = self.mock_subtensor
                 miner.wallet = self.mock_wallet
                 
                 return miner
     
-    def create_test_validator(self) -> HFAValidator:
+    def create_test_validator(self) -> Validator:
         """Create a test validator instance"""
         with patch('bittensor.subtensor') as mock_subtensor_class:
             mock_subtensor_class.return_value = self.mock_subtensor
             with patch('bittensor.wallet') as mock_wallet_class:
                 mock_wallet_class.return_value = self.mock_wallet
                 
-                validator = HFAValidator(config=self.config)
+                validator = Validator(config=self.config)
                 validator.metagraph = self.mock_metagraph
                 validator.subtensor = self.mock_subtensor
                 validator.wallet = self.mock_wallet
@@ -151,13 +148,11 @@ class TestEndToEndIntegration:
     async def test_complete_evaluation_cycle(self, test_env):
         """Test complete evaluation cycle from task generation to weight setting"""
         
-        # Create validator and miners
+        # Create validator and miner
         validator = test_env.create_test_validator()
-        hfa_miner = test_env.create_test_miner("hfa")
-        simplemind_miner = test_env.create_test_miner("simplemind")
-        hybrid_miner = test_env.create_test_miner("hybrid")
+        miner = test_env.create_test_miner("standard")
         
-        miners = [hfa_miner, simplemind_miner, hybrid_miner]
+        miners = [miner]
         
         # Mock miner responses
         for i, miner in enumerate(miners):
@@ -210,37 +205,21 @@ class TestEndToEndIntegration:
         print("✅ Complete evaluation cycle test passed")
     
     @pytest.mark.asyncio
-    async def test_multi_architecture_support(self, test_env):
-        """Test support for multiple model architectures"""
+    async def test_standard_architecture_support(self, test_env):
+        """Test support for the standard model architecture"""
         
-        # Test model factory
-        factory = ModelArchitectureFactory()
-        available_architectures = factory.get_available_architectures()
+        # Test model creation
+        config = {
+            "architecture": "standard",
+            "model_name": "test_standard_model",
+            "max_context_length": 4096
+        }
         
-        assert "hfa" in available_architectures, "Should support HFA architecture"
-        assert "simplemind" in available_architectures, "Should support SimpleMind architecture"
-        assert "hybrid" in available_architectures, "Should support hybrid architecture"
+        # Note: ModelArchitectureFactory is removed, so we test Validator/Miner logic
+        validator = test_env.create_test_validator()
+        assert validator is not None
         
-        # Test model creation for each architecture
-        for architecture in ["hfa", "simplemind", "hybrid"]:
-            config = {
-                "architecture": architecture,
-                "model_name": f"test_{architecture}_model",
-                "max_context_length": 4096
-            }
-            
-            try:
-                model = factory.create_model(config)
-                assert model is not None, f"Should create {architecture} model"
-                
-                # Test basic model interface
-                assert hasattr(model, 'forward'), f"{architecture} model should have forward method"
-                assert hasattr(model, 'get_model_info'), f"{architecture} model should have get_model_info method"
-                
-            except Exception as e:
-                pytest.fail(f"Failed to create {architecture} model: {e}")
-        
-        print("✅ Multi-architecture support test passed")
+        print("✅ Standard architecture support test passed")
     
     @pytest.mark.asyncio
     async def test_benchmark_integration(self, test_env):
@@ -285,10 +264,10 @@ class TestEndToEndIntegration:
         
         # Simulate responses from different miners
         test_responses = [
-            ("miner_0", "This is a unique response from miner 0", {"architecture_type": "hfa"}),
-            ("miner_1", "This is a different response from miner 1", {"architecture_type": "simplemind"}),
-            ("miner_2", "This is another unique response from miner 2", {"architecture_type": "hybrid"}),
-            ("miner_3", "This is a unique response from miner 0", {"architecture_type": "hfa"}),  # Similar to miner 0
+            ("miner_0", "This is a unique response from miner 0", {"architecture_type": "standard"}),
+            ("miner_1", "This is a different response from miner 1", {"architecture_type": "standard"}),
+            ("miner_2", "This is another unique response from miner 2", {"architecture_type": "standard"}),
+            ("miner_3", "This is a unique response from miner 0", {"architecture_type": "standard"}),  # Similar to miner 0
         ]
         
         diversity_metrics = []
@@ -363,7 +342,7 @@ class TestEndToEndIntegration:
             task=test_task,
             response=test_response,
             miner_uid=1,
-            model_info={"architecture": "hfa"}
+            model_info={"architecture": "standard"}
         )
         
         assert scoring_result is not None, "Should generate scoring result"
@@ -468,7 +447,7 @@ class TestEndToEndIntegration:
             prompt="Test prompt",
             evaluation_type="memory_retention",
             max_tokens=100,
-            architecture_type="hfa",
+            architecture_type="standard",
             model_configuration={"max_context_length": 4096}
         )
         
@@ -549,21 +528,7 @@ class TestEndToEndIntegration:
         assert scores[0] >= 0.0, "Successful miners should get valid scores"
         assert scores[2] >= 0.0, "Successful miners should get valid scores"
         
-        # Test model factory error handling
-        factory = ModelArchitectureFactory()
-        
-        # Test invalid architecture
-        invalid_config = {
-            "architecture": "nonexistent_architecture",
-            "model_name": "test_model"
-        }
-        
-        try:
-            model = factory.create_model(invalid_config)
-            pytest.fail("Should raise exception for invalid architecture")
-        except Exception as e:
-            assert "architecture" in str(e).lower(), "Error should mention architecture"
-        
+        # Note: ModelArchitectureFactory is removed
         print("✅ Error handling and recovery test passed")
     
     @pytest.mark.asyncio
@@ -632,17 +597,13 @@ async def test_full_system_integration():
     test_env.setup_mocks()
     
     try:
-        # Create all major components
+        # Create major components
         validator = test_env.create_test_validator()
-        miners = [
-            test_env.create_test_miner("hfa"),
-            test_env.create_test_miner("simplemind"),
-            test_env.create_test_miner("hybrid")
-        ]
+        miner = test_env.create_test_miner("standard")
         
-        # Test that all components can be created without errors
+        # Test that components can be created without errors
         assert validator is not None, "Should create validator"
-        assert len(miners) == 3, "Should create all miners"
+        assert miner is not None, "Should create miner"
         
         # Test basic functionality of each component
         for i, miner in enumerate(miners):

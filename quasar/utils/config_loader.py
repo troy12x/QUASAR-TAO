@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 # Copyright © 2023 Yuma Rao
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -17,7 +17,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 """
-Configuration Loader for Unified HFA-SimpleMind Subnet
+Configuration Loader for Quasar Subnet
 
 This module provides utilities for loading and merging configuration files
 with command-line arguments and environment variables.
@@ -58,7 +58,7 @@ class ConfigLoader:
         
         # Start with file-based configurations
         merged_config = {
-            'hfa_config': validated_configs.get('hfa', {}),
+            'quasar_config': validated_configs.get('quasar', {}),
             'subnet_config': validated_configs.get('subnet', {}),
         }
         
@@ -87,105 +87,39 @@ class ConfigLoader:
         Returns:
             Model configuration dictionary
         """
-        hfa_config = merged_config.get('hfa_config', {})
+        # We no longer support multiple architectures.
+        # This returns the primary Quasar model configuration.
+        quasar_config = merged_config.get('quasar_config', {})
         
-        # Determine architecture type
-        if not architecture_type:
-            model_selection = hfa_config.get('model_selection', {})
-            architecture_type = model_selection.get('default_architecture', 'hfa')
-        
-        # Try to get base model config from HFA config
+        # Try to get model config from Quasar config
         try:
-            if hfa_config and 'architectures' in hfa_config:
-                model_config = ConfigValidator.get_model_config(hfa_config, architecture_type)
+            if quasar_config:
+                model_config = quasar_config.get('model', {})
+                if not model_config:
+                    raise ValueError("Quasar config misses 'model' section")
             else:
-                # If hfa_config is empty or invalid, return a basic default config
-                bt.logging.warning(f"HFA config empty or invalid, using basic default for {architecture_type}")
-                model_config = cls._get_default_model_config(architecture_type)
+                raise ValueError("Quasar configuration is missing or empty")
         except Exception as e:
-            bt.logging.warning(f"Failed to get model config from HFA config: {e}, using default")
-            model_config = cls._get_default_model_config(architecture_type)
+            bt.logging.error(f"Failed to get model config: {e}")
+            raise
         
-        # Apply any architecture-specific overrides from merged config
-        arch_overrides = merged_config.get(f'{architecture_type}_overrides', {})
-        model_config.update(arch_overrides)
+        # Apply any overrides from merged config
+        overrides = merged_config.get('model_overrides', {})
+        model_config.update(overrides)
         
         return model_config
     
-    @classmethod
-    def _get_default_model_config(cls, architecture_type: str) -> Dict[str, Any]:
-        """
-        Get a basic default configuration for an architecture.
-        
-        Args:
-            architecture_type: Architecture type
-            
-        Returns:
-            Default model configuration
-        """
-        common_config = {
-            'vocab_size': 50257,
-            'd_model': 512,
-            'max_seq_len': 100000,
-            'dropout': 0.1
-        }
-        
-        if architecture_type == 'hfa':
-            return {
-                **common_config,
-                'num_layers': 6,
-                'num_heads': 8,
-                'd_ff': 2048
-            }
-        elif architecture_type == 'simplemind':
-            return {
-                **common_config,
-                'num_layers': 6,
-                'num_channels': 64,
-                'router_type': 'dynamic',
-                'aggregation_type': 'learnable'
-            }
-        elif architecture_type == 'hybrid':
-            return {
-                **common_config,
-                'mixing_strategy': 'alternating',
-                'hfa_config': {
-                    'num_layers': 3,
-                    'num_heads': 8,
-                    'd_ff': 2048
-                },
-                'simplemind_config': {
-                    'num_layers': 3,
-                    'num_channels': 64,
-                    'router_type': 'dynamic',
-                    'aggregation_type': 'learnable'
-                }
-            }
-        else:  # standard
-            return {
-                **common_config,
-                'num_layers': 6,
-                'num_heads': 8,
-                'd_ff': 2048
-            }
     
     @classmethod
     def _apply_cli_overrides(cls, config: Dict[str, Any], bt_config: "bt.Config"):
         """Apply command-line argument overrides to configuration."""
-        # Architecture selection override
-        if hasattr(bt_config, 'neuron') and bt_config.neuron and hasattr(bt_config.neuron, 'model_architecture'):
-            if 'model_selection' not in config['hfa_config']:
-                config['hfa_config']['model_selection'] = {}
-            config['hfa_config']['model_selection']['default_architecture'] = bt_config.neuron.model_architecture
-        
         # Max context length override
         if hasattr(bt_config, 'neuron') and bt_config.neuron and hasattr(bt_config.neuron, 'max_context_length'):
-            config['hfa_config']['max_context_length'] = bt_config.neuron.max_context_length
+            config['quasar_config']['max_context_length'] = bt_config.neuron.max_context_length
         
-        # Hybrid mixing strategy override
-        if hasattr(bt_config, 'neuron') and bt_config.neuron and hasattr(bt_config.neuron, 'hybrid_mixing_strategy'):
-            hybrid_overrides = config.setdefault('hybrid_overrides', {})
-            hybrid_overrides['mixing_strategy'] = bt_config.neuron.hybrid_mixing_strategy
+        # Baseline comparison override
+        if hasattr(bt_config, 'neuron') and bt_config.neuron and hasattr(bt_config.neuron, 'baseline_comparison_required'):
+            config['subnet_config']['architecture_support']['baseline_comparison_required'] = bt_config.neuron.baseline_comparison_required
         
         # Benchmark evaluation settings
         if hasattr(bt_config, 'neuron') and bt_config.neuron and hasattr(bt_config.neuron, 'enable_benchmark_evaluation'):
@@ -215,25 +149,20 @@ class ConfigLoader:
                 scoring_weights['diversity_bonus'] = bt_config.validator.diversity_bonus_weight
         
         # Miner-specific overrides
+        # Miner-specific overrides
         if hasattr(bt_config, 'miner') and bt_config.miner:
             miner_config = config.setdefault('miner_overrides', {})
             
-            if hasattr(bt_config.miner, 'preferred_architecture'):
-                miner_config['preferred_architecture'] = bt_config.miner.preferred_architecture
-            
-            if hasattr(bt_config.miner, 'enable_model_switching'):
-                miner_config['enable_model_switching'] = bt_config.miner.enable_model_switching
-            
             if hasattr(bt_config.miner, 'model_checkpoint_path'):
+                # Note: This would typically be a local path or HF identifier
                 miner_config['model_checkpoint_path'] = bt_config.miner.model_checkpoint_path
         
-        # Architecture config override (JSON string)
+        # Architecture config override (JSON string) - renamed to model_config_override
         if hasattr(bt_config, 'neuron') and bt_config.neuron and hasattr(bt_config.neuron, 'architecture_config_override') and bt_config.neuron.architecture_config_override:
             try:
                 override_config = json.loads(bt_config.neuron.architecture_config_override)
-                arch_type = config['hfa_config']['model_selection']['default_architecture']
-                arch_overrides = config.setdefault(f'{arch_type}_overrides', {})
-                arch_overrides.update(override_config)
+                model_overrides = config.setdefault('model_overrides', {})
+                model_overrides.update(override_config)
             except json.JSONDecodeError as e:
                 bt.logging.error(f"Invalid JSON in architecture_config_override: {e}")
     
@@ -241,19 +170,21 @@ class ConfigLoader:
     def _apply_env_overrides(cls, config: Dict[str, Any]):
         """Apply environment variable overrides to configuration."""
         # Architecture selection
-        env_architecture = os.getenv('SUBNET_MODEL_ARCHITECTURE')
-        if env_architecture:
-            if 'model_selection' not in config['hfa_config']:
-                config['hfa_config']['model_selection'] = {}
-            config['hfa_config']['model_selection']['default_architecture'] = env_architecture
+        # Environment selection
+        env_arch = os.getenv('QUASAR_MODEL_CONFIG')
+        if env_arch:
+            try:
+                config['quasar_config']['model'] = json.loads(env_arch)
+            except:
+                bt.logging.warning(f"Invalid QUASAR_MODEL_CONFIG JSON")
         
         # Max context length
-        env_max_context = os.getenv('SUBNET_MAX_CONTEXT_LENGTH')
+        env_max_context = os.getenv('QUASAR_MAX_CONTEXT_LENGTH')
         if env_max_context:
             try:
-                config['hfa_config']['max_context_length'] = int(env_max_context)
+                config['quasar_config']['max_context_length'] = int(env_max_context)
             except ValueError:
-                bt.logging.warning(f"Invalid SUBNET_MAX_CONTEXT_LENGTH: {env_max_context}")
+                bt.logging.warning(f"Invalid QUASAR_MAX_CONTEXT_LENGTH: {env_max_context}")
         
         # Evaluation cycle seconds
         env_eval_cycle = os.getenv('SUBNET_EVALUATION_CYCLE_SECONDS')
@@ -291,16 +222,14 @@ class ConfigLoader:
     def create_runtime_config(
         cls, 
         config_dir: str, 
-        bt_config: "bt.Config",
-        architecture_type: Optional[str] = None
+        bt_config: "bt.Config"
     ) -> Dict[str, Any]:
         """
-        Create a complete runtime configuration for the subnet.
+        Create a complete runtime configuration for the Quasar subnet.
         
         Args:
             config_dir: Directory containing configuration files
             bt_config: Bittensor configuration object
-            architecture_type: Optional architecture type override
             
         Returns:
             Complete runtime configuration dictionary or None if configuration fails
@@ -309,45 +238,16 @@ class ConfigLoader:
             # Load merged configuration
             merged_config = cls.load_subnet_config(config_dir, bt_config)
             
-            # Check if we have valid hfa_config
-            if not merged_config.get('hfa_config'):
-                bt.logging.error("HFA configuration is missing or empty")
+            # Check if we have valid quasar_config
+            if not merged_config.get('quasar_config'):
+                bt.logging.error("Quasar configuration is missing or empty")
                 return None
-            
-            # Determine architecture type with fallback
-            if architecture_type:
-                final_arch_type = architecture_type
-            elif 'model_selection' in merged_config['hfa_config']:
-                final_arch_type = merged_config['hfa_config']['model_selection'].get('default_architecture', 'hfa')
-            else:
-                final_arch_type = 'hfa'
-            
-            # Get enabled architectures from config
-            if 'architectures' in merged_config.get('hfa_config', {}):
-                enabled_archs = [
-                    arch_name for arch_name, arch_config in merged_config['hfa_config']['architectures'].items()
-                    if arch_config.get('enabled', False)
-                ]
-            else:
-                enabled_archs = ['hfa', 'simplemind']
-            
-            # Build model configs for all enabled architectures
-            model_configs = {}
-            for arch in enabled_archs:
-                try:
-                    model_configs[arch] = cls.get_model_config(merged_config, arch)
-                except Exception as e:
-                    bt.logging.warning(f"Failed to get config for {arch}: {e}")
-                    model_configs[arch] = cls._get_default_model_config(arch)
             
             # Create runtime configuration
             runtime_config = {
                 'subnet': merged_config.get('subnet_config', {}),
-                'hfa': merged_config['hfa_config'],
-                'model': cls.get_model_config(merged_config, final_arch_type),
-                'architecture_type': final_arch_type,
-                'enabled_architectures': enabled_archs,
-                'model_configs': model_configs,
+                'quasar': merged_config['quasar_config'],
+                'model': cls.get_model_config(merged_config),
                 'bittensor': {
                     'netuid': getattr(bt_config, 'netuid', 1),
                     'network': getattr(bt_config.subtensor, 'network', 'test') if hasattr(bt_config, 'subtensor') else 'test',
@@ -364,7 +264,7 @@ class ConfigLoader:
             if 'validator_overrides' in merged_config.get('subnet_config', {}):
                 runtime_config['validator'] = merged_config['subnet_config']['validator_overrides']
             
-            bt.logging.info(f"Runtime configuration created for architecture: {runtime_config['architecture_type']}")
+            bt.logging.info("Runtime configuration created successfully")
             return runtime_config
             
         except Exception as e:

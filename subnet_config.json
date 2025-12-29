@@ -27,14 +27,9 @@
   },
   "architecture_support": {
     "enabled_architectures": [
-      "hfa",
-      "simplemind",
-      "hybrid",
       "standard"
     ],
-    "architecture_diversity_bonus": 0.05,
-    "novel_architecture_bonus": 0.02,
-    "baseline_comparison_required": true
+    "baseline_comparison_required": false
   },
   "benchmark_evaluation": {
     "enabled_benchmarks": [

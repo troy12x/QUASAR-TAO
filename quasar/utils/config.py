@@ -83,7 +83,7 @@ def validate_subnet_configs(config: "bt.Config"):
     if not hasattr(config, 'subnet') or config.subnet is None:
         config.subnet = type('SubnetConfig', (), {})()
     
-    config.subnet.hfa_config = {}
+    config.subnet.quasar_config = {}
     config.subnet.subnet_config = {}
     
     try:
@@ -96,7 +96,7 @@ def validate_subnet_configs(config: "bt.Config"):
         validated_configs = ConfigValidator.validate_all_configs(config_dir)
         
         # Update with validated configs if successful
-        config.subnet.hfa_config = validated_configs.get('hfa', {})
+        config.subnet.quasar_config = validated_configs.get('quasar', {})
         config.subnet.subnet_config = validated_configs.get('subnet', {})
         
         bt.logging.info("Subnet configuration validation completed successfully")
@@ -170,35 +170,12 @@ def add_args(cls, parser):
         default="",
     )
 
-    # Architecture-specific configuration arguments
+    # Quasar model configuration arguments
     parser.add_argument(
-        "--neuron.model_architecture",
+        "--neuron.model_name",
         type=str,
-        help="Model architecture to use (hfa, simplemind, hybrid, standard)",
-        default="hfa",
-        choices=["hfa", "simplemind", "hybrid", "standard"]
-    )
-
-    parser.add_argument(
-        "--neuron.architecture_config_override",
-        type=str,
-        help="JSON string to override default architecture configuration",
-        default=None
-    )
-
-    parser.add_argument(
-        "--neuron.enable_architecture_switching",
-        action="store_true",
-        help="Enable dynamic architecture switching based on task requirements",
-        default=False
-    )
-
-    parser.add_argument(
-        "--neuron.hybrid_mixing_strategy",
-        type=str,
-        help="Mixing strategy for hybrid models (alternating, parallel, sequential)",
-        default="alternating",
-        choices=["alternating", "parallel", "sequential"]
+        help="Model name or identifier",
+        default="quasar-1b"
     )
 
     parser.add_argument(
@@ -261,22 +238,6 @@ def add_miner_args(cls, parser):
         type=str,
         default="opentensor-dev",
         help="Wandb entity to log to.",
-    )
-
-    # Miner-specific architecture arguments
-    parser.add_argument(
-        "--miner.preferred_architecture",
-        type=str,
-        help="Preferred model architecture for this miner",
-        default=None,
-        choices=["hfa", "simplemind", "hybrid", "standard"]
-    )
-
-    parser.add_argument(
-        "--miner.enable_model_switching",
-        action="store_true",
-        help="Enable switching between different model architectures based on task",
-        default=False
     )
 
     parser.add_argument(
@@ -380,7 +341,7 @@ def add_validator_args(cls, parser):
         "--wandb.entity",
         type=str,
         help="The name of the project where you are sending the new run.",
-        default="opentensor-dev",
+        default="quasar-dev",
     )
 
     parser.add_argument(

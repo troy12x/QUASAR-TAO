@@ -1,5 +1,5 @@
 # The MIT License (MIT)
-# Copyright © 2024 HFA Research Team
+# Copyright © 2026 SILX AI Research Team
 
 """
 Benchmark Task for HFA Subnet
