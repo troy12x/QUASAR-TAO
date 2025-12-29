@@ -24,10 +24,20 @@ from . import auth
 from . import scoring
 from .database import engine, get_db
 
+from fastapi.middleware.cors import CORSMiddleware
+
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Quasar Validator API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize BenchmarkLoader
 print("🔄 Initializing BenchmarkLoader in API...")
