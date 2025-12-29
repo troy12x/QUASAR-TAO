@@ -28,20 +28,20 @@ import threading
 import bittensor as bt
 
 # Import subnet components
-from template.model_factory import ModelArchitectureFactory
-from template.models.hfa_model import HFAModel
-from template.models.simplemind_model import SimpleMindModel
-from template.models.hybrid_model import HybridModel
-from template.validator.diversity_tracker import DiversityTracker
-from template.validator.scoring_harness import ScoringHarness
-from template.monitoring import (
+from quasar.model_factory import ModelArchitectureFactory
+from quasar.models.hfa_model import HFAModel
+from quasar.models.simplemind_model import SimpleMindModel
+from quasar.models.hybrid_model import HybridModel
+from quasar.validator.diversity_tracker import DiversityTracker
+from quasar.validator.scoring_harness import ScoringHarness
+from quasar.monitoring import (
     TelemetryCollector, HealthMonitor, AlertManager, 
     DiagnosticSystem, AuditTrailManager
 )
 from benchmarks.benchmark_loader import BenchmarkLoader
 from neurons.miner import HFAMiner
 from neurons.validator import HFAValidator
-import template.protocol as protocol
+import quasar.protocol as protocol
 
 
 class IntegrationTestEnvironment:
@@ -449,7 +449,7 @@ class TestEndToEndIntegration:
         await asyncio.sleep(2)
         
         # Query events
-        from template.monitoring.audit_trail import AuditQuery
+        from quasar.monitoring.audit_trail import AuditQuery
         query = AuditQuery(limit=10)
         events = audit_manager.query_events(query)
         assert len(events) >= 2, "Should record audit events"

@@ -5,6 +5,7 @@ from fuzzywuzzy import fuzz
 from collections import Counter
 from rouge import Rouge
 import numpy as np
+import difflib
 
 def normalize_answer(s):
     """Lower text and remove punctuation, articles and extra whitespace."""
@@ -144,7 +145,30 @@ def qa_f1_zh_score(prediction, ground_truth, **kwargs):
     ground_truth_tokens = [token for token in ground_truth_tokens if len(token) > 0]
     return f1_score(prediction_tokens, ground_truth_tokens)
 
+def mrcr_match_score(prediction, ground_truth, **kwargs):
+    """OpenAI MRCR Metric: Prepend check + SequenceMatcher ratio."""
+    if not prediction or not ground_truth:
+        return 0.0
+        
+    # 1. Identify hash (The first 10 chars usually)
+    # The ground truth starts with the hash.
+    # Prediction MUST start with same hash.
+    hash_len = 10
+    gt_hash = ground_truth[:hash_len]
+    pred_hash = prediction[:hash_len]
+    
+    if gt_hash != pred_hash:
+        return 0.0
+        
+    # 2. Compare content using SequenceMatcher
+    gt_content = ground_truth[hash_len:].strip()
+    pred_content = prediction[hash_len:].strip()
+    
+    matcher = difflib.SequenceMatcher(None, pred_content, gt_content)
+    return matcher.ratio()
+
 dataset2metric = {
+    "openai_mrcr_code": mrcr_match_score,
     "narrativeqa": qa_f1_score,
     "qasper": qa_f1_score,
     "multifieldqa_en": qa_f1_score,

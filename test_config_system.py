@@ -12,7 +12,7 @@ import sys
 from typing import Dict, Any
 
 # Add the template directory to the path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'template'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'quasar'))
 
 def test_configuration_system():
     """Test the enhanced configuration system."""

@@ -1,6 +1,6 @@
 {
-  "subnet_name": "Unified HFA-SimpleMind Infinite Context",
-  "description": "Unified subnet integrating HFA and SimpleMind architectures for infinite context processing",
+  "subnet_name": "Quasar Infinite Context",
+  "description": "Subnet for infinite context processing using Quasar architecture",
   "version": "2.0.0",
   "evaluation_cycle_seconds": 90,
   "max_miners_per_cycle": 16,

@@ -623,7 +623,7 @@ class DiagnosticSystem:
         """Test model loading capabilities"""
         try:
             # Try to import model factory
-            from template.model_factory import ModelArchitectureFactory
+            from quasar.model_factory import ModelArchitectureFactory
             
             factory = ModelArchitectureFactory()
             

@@ -158,8 +158,9 @@ Current supported models for miners:
 **Setup**:
 ```bash
 # Clone repository
-git clone https://github.com/your-org/QUASAR-TAO
-cd QUASAR-TAO/hfa_subnet
+# Clone repository
+git clone https://github.com/SILX-LABS/QUASAR-SUBNET
+cd QUASAR-SUBNET
 
 # Install dependencies
 pip install -r requirements.txt
@@ -191,8 +192,9 @@ python neurons/miner.py \
 **Setup**:
 ```bash
 # Clone and install
+# Clone repository
 git clone https://github.com/your-org/QUASAR-TAO
-cd QUASAR-TAO/hfa_subnet
+cd QUASAR-TAO/quasar_subnet
 pip install -r requirements.txt
 pip install -e .
 
@@ -218,25 +220,25 @@ python neurons/validator.py \
 
 ## Roadmap
 
-### Phase 1: Foundation (Q4 2024)
+### Phase 1: Foundation (Q4 2025)
 - [x] Launch QUASAR subnet on Bittensor testnet
 - [x] Implement LongBench evaluation framework
 - [x] Deploy mock mode for local testing
 - [x] Integrate WandB monitoring
 
-### Phase 2: Expansion (Q1 2025)
+### Phase 2: Expansion (Q1 2026)
 - [ ] Add support for additional long-context benchmarks
 - [ ] Implement dynamic difficulty adjustment
 - [ ] Expand supported model architectures
 - [ ] Publish research paper on decentralized long-context evaluation
 
-### Phase 3: Advanced Features (Q2 2025)
+### Phase 3: Advanced Features (Q2 2026)
 - [ ] Multi-modal long-context evaluation (text + images)
 - [ ] Custom benchmark submission system
 - [ ] Real-time leaderboard and analytics dashboard
 - [ ] Integration with external AI research labs
 
-### Phase 4: Ecosystem Growth (Q3 2025)
+### Phase 4: Ecosystem Growth (Q3 2026)
 - [ ] Developer API for programmatic access
 - [ ] Benchmark marketplace for custom evaluations
 - [ ] Cross-subnet collaboration features

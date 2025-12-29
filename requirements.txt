@@ -36,3 +36,4 @@ rouge>=1.0.1
 jieba>=0.42.1
 fuzzywuzzy>=0.18.0
 python-Levenshtein>=0.12.2
+datasets>=2.12.0

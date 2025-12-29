@@ -1,23 +1,24 @@
 # The MIT License (MIT)
-# Copyright © 2023 Yuma Rao
-# Copyright © 2024 QUASAR-TAO Team
+# Copyright © 2026 SILX INC
 
 import os
 import time
 import typing
+from typing import Optional, List, Any, Dict
+from pydantic import Field
 import torch
 import bittensor as bt
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-# Add the parent directory to path so we can import template
+# Add the parent directory to path so we can import quasar
 import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-import template
-from template.base.miner import BaseMinerNeuron
+import quasar
+from quasar.base.miner import BaseMinerNeuron
 
 class Miner(BaseMinerNeuron):
     """
@@ -57,14 +58,23 @@ class Miner(BaseMinerNeuron):
             bt.logging.info(f"Supported models: {', '.join(self.SUPPORTED_MODELS)}")
         
         try:
+            print(f"🔄 Loading tokenizer for {self.model_name}...")
             bt.logging.info(f"Loading model: {self.model_name}...")
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+            
+            print(f"🔄 Loading model weights for {self.model_name}... (this can take several minutes)")
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name, 
                 trust_remote_code=True, 
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto"
+                low_cpu_mem_usage=True,
+                device_map="auto" if torch.cuda.is_available() else None
             )
+            
+            # Get max length from config or model config
+            self.max_length = getattr(self.config.miner, 'max_length', 
+                                     getattr(self.model.config, 'max_position_embeddings', 32768))
+            bt.logging.info(f"Miner max length set to: {self.max_length}")
             self.model.eval()
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
         except Exception as e:
@@ -73,15 +83,15 @@ class Miner(BaseMinerNeuron):
             raise e
 
     async def forward(
-        self, synapse: template.protocol.BenchmarkEvaluationSynapse
-    ) -> template.protocol.BenchmarkEvaluationSynapse:
+        self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
+    ) -> quasar.protocol.BenchmarkEvaluationSynapse:
         """
         Processes the incoming 'synapse' object by generating a response to the prompt 
         given the context.
         """
         # Note: The protocol class name needs to be confirmed. 
         # Assuming `InfiniteContextSynapse` or similar from previous code validation.
-        # Existing miner used `template.protocol.InfiniteContextSynapse`.
+        # Existing miner used `quasar.protocol.InfiniteContextSynapse`.
         
         start_time = time.time()
         
@@ -93,6 +103,9 @@ class Miner(BaseMinerNeuron):
             context = getattr(synapse, 'context', '')
             prompt = getattr(synapse, 'prompt', '') # LongBench usually has a specific question/prompt
             
+            print(f"\n[MINER] 📝 Received Task:")
+            print(f"[MINER] Prompt: {prompt}")
+            print(f"[MINER] Context Length: {len(context)} characters")
             bt.logging.info(f"📨 Received request. Context len: {len(context)} chars")
 
             # formatting input for Qwen
@@ -100,8 +113,25 @@ class Miner(BaseMinerNeuron):
             # We can use apply_chat_template if available, or raw concatenation.
             
             messages = [
-                {"role": "system", "content": "You are a helpful assistant capable of processing long contexts."},
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {prompt}"}
+                {"role": "system", "content": """You are a specialized execution agent for semantic code analysis.
+
+TASK STEPS:
+1. Find the TARGET ENTITY mentioned in the task prompt
+2. Locate the SEMANTIC DESCRIPTION of its operational state in the context (e.g., 'severe hydraulic instability', 'latency high')
+3. MAP that description to one of these standardized Modes: 'CRITICAL', 'OPTIMIZED', 'SAFE', or 'DEGRADED'
+4. Find and EXECUTE the corresponding Python function with the Mode and input value
+
+OUTPUT FORMAT REQUIREMENT:
+- Show your step-by-step reasoning
+- End with the final numeric answer in LaTeX boxed format: \\boxed{number}
+- Example: \\boxed{223}
+- The boxed answer MUST be the last line of your response"""},
+                {"role": "user", "content": f"""Context:
+{context}
+
+Task: {prompt}
+
+IMPORTANT: After showing your work, you MUST format your final answer as \\boxed{{number}}. For example, if the answer is 223, write \\boxed{{223}}."""}
             ]
             
             text_input = self.tokenizer.apply_chat_template(
@@ -110,15 +140,19 @@ class Miner(BaseMinerNeuron):
                 add_generation_prompt=True
             )
             
-            model_inputs = self.tokenizer([text_input], return_tensors="pt").to(self.device)
+            model_inputs = self.tokenizer(
+                [text_input], 
+                return_tensors="pt",
+                truncation=True,
+                max_length=self.max_length
+            ).to(self.device)
 
             # Generate
-            # Long context generation might be slow.
             with torch.no_grad():
                 generated_ids = self.model.generate(
                     model_inputs.input_ids,
-                    max_new_tokens=512, # LongBench usually requires short answers
-                    do_sample=False, # Deterministic for benchmarks often better, or low temp
+                    max_new_tokens=32000, # Increased to 32k to prevent ANY truncation
+                    do_sample=False, 
                     temperature=0.1
                 )
             
@@ -127,10 +161,16 @@ class Miner(BaseMinerNeuron):
             ]
             response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
             
-            bt.logging.info(f"✅ Generated response: {response[:100]}...")
+            # print(f"[MINER] ✅ Generated Response: {response}")  # Commented to reduce log spam
+            bt.logging.info(f"✅ Generated response length: {len(response)} chars")
             
             synapse.response = response
             synapse.processing_time = time.time() - start_time
+            
+            # Precise memory cleanup
+            del model_inputs, generated_ids
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             # Fill other metadata if required by protocol
             if hasattr(synapse, 'model_name'):
@@ -144,7 +184,7 @@ class Miner(BaseMinerNeuron):
         return synapse
 
     async def blacklist(
-        self, synapse: template.protocol.BenchmarkEvaluationSynapse
+        self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
     ) -> typing.Tuple[bool, str]:
         
         if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
@@ -159,7 +199,7 @@ class Miner(BaseMinerNeuron):
         )
         return False, "Hotkey recognized!"
 
-    async def priority(self, synapse: template.protocol.BenchmarkEvaluationSynapse) -> float:
+    async def priority(self, synapse: quasar.protocol.BenchmarkEvaluationSynapse) -> float:
         caller_uid = self.metagraph.hotkeys.index(
             synapse.dendrite.hotkey
         )  

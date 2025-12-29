@@ -54,10 +54,13 @@ class BenchmarkLoader:
         self.config = config or {}
         
         # Initialize LongBench loader (primary benchmark)
+        bt.logging.info("🔍 Initializing LongBenchLoader...")
         self.longbench_loader = LongBenchLoader(self.config.get('longbench', {}))
         
         # Benchmark availability tracking
+        bt.logging.info("🔍 Checking benchmark availability (this might take a while if downloading)...")
         self.available_benchmarks = self._check_benchmark_availability()
+        bt.logging.info(f"✅ Available benchmarks: {self.available_benchmarks}")
         
         # Task generation settings for LongBench
         self.max_tasks_per_benchmark = self.config.get('max_tasks_per_benchmark', 5)
@@ -189,35 +192,32 @@ class BenchmarkLoader:
         return tasks
     
     def _generate_memory_task(self, target_length: int, task_id: int) -> BenchmarkTask:
-        """Generate synthetic memory retention task"""
+        """Generate synthetic memory retention task with randomized depth and unique content."""
         
-        # Create context with embedded information
-        words = []
-        memory_info = f"MEMORY_ANCHOR_{task_id}_{random.randint(1000, 9999)}"
-        anchor_position = random.randint(100, min(target_length - 100, 1000))
+        # Word pool for haystack
+        filler_pool = ["system", "data", "node", "link", "process", "memory", "storage", "cache"]
+        words = [random.choice(filler_pool) for _ in range(target_length)]
         
-        for i in range(target_length):
-            if i == anchor_position:
-                words.append(memory_info)
-            else:
-                words.append(random.choice([
-                    "the", "and", "to", "of", "a", "in", "is", "it", "you", "that",
-                    "he", "was", "for", "on", "are", "as", "with", "his", "they", "at"
-                ]))
+        # Unique memory info
+        memory_info = f"ANCHOR_REF_{task_id}_{random.randint(1000, 9999)}_{random.choice(filler_pool).upper()}"
+        
+        # Random position (0% to 100% depth)
+        anchor_position = random.randint(0, target_length - 1)
+        words[anchor_position] = memory_info
         
         context = " ".join(words)
-        prompt = f"What specific information was stored at position {anchor_position}?"
+        prompt = f"The following text contains a unique anchor reference. Locate and provide the exact string of the anchor reference hidden in the text. Hint: It follows the pattern ANCHOR_REF_X_Y_WORD."
         
         return BenchmarkTask(
-            task_id=f"synthetic_memory_{task_id}",
+            task_id=f"synthetic_memory_robust_{task_id}",
             task_type="synthetic",
-            dataset_name="memory_retention",
+            dataset_name="memory_retention_robust",
             context=context,
             prompt=prompt,
             expected_output=memory_info,
-            evaluation_metrics=["exact_match", "memory_retention"],
+            evaluation_metrics=["exact_match"],
             difficulty_level="medium" if target_length < 32000 else "hard",
-            metadata={"anchor_position": anchor_position, "memory_info": memory_info}
+            metadata={"anchor_position": anchor_position, "anchor_depth": anchor_position/target_length}
         )
     
     def _generate_pattern_task(self, target_length: int, task_id: int) -> BenchmarkTask:
@@ -283,33 +283,33 @@ class BenchmarkLoader:
         )
     
     def _generate_qa_task(self, target_length: int, task_id: int) -> BenchmarkTask:
-        """Generate synthetic question answering task"""
+        """Generate synthetic question answering task with randomized depth."""
         
-        # Embed answer in context
-        answer = f"The answer is {random.randint(100, 999)}"
-        question_topic = random.choice(["number", "value", "result", "outcome"])
+        # Unique answer
+        secret_value = random.randint(100000, 999999)
+        answer = f"X_VAL_{secret_value}"
         
-        # Create context with embedded answer
-        filler_text = "This is background information. " * (target_length // 6)
-        answer_position = random.randint(target_length // 4, 3 * target_length // 4)
+        # Varied fillers
+        fillers = ["Noise context", "Background info", "Filler text", "Data stream", "Metadata"]
+        words = [random.choice(fillers) for _ in range(target_length)]
         
-        context_parts = filler_text.split()
-        if answer_position < len(context_parts):
-            context_parts[answer_position] = answer
+        # Random position (0%-100% depth)
+        answer_position = random.randint(0, target_length - 1)
+        words[answer_position] = f"The specific target value for this session is {answer}."
         
-        context = " ".join(context_parts[:target_length])
-        prompt = f"What {question_topic} is mentioned in the document?"
+        context = " ".join(words)
+        prompt = "Extract the specific target value mentioned in the background information. It starts with 'X_VAL_'."
         
         return BenchmarkTask(
-            task_id=f"synthetic_qa_{task_id}",
+            task_id=f"synthetic_qa_robust_{task_id}",
             task_type="synthetic",
-            dataset_name="question_answering",
+            dataset_name="question_answering_robust",
             context=context,
             prompt=prompt,
             expected_output=answer,
-            evaluation_metrics=["exact_match", "semantic_similarity"],
+            evaluation_metrics=["exact_match"],
             difficulty_level="easy" if target_length < 8000 else "medium",
-            metadata={"answer": answer, "answer_position": answer_position}
+            metadata={"answer": answer, "answer_depth": answer_position/target_length}
         )
     
     def get_benchmark_stats(self) -> Dict[str, Any]:

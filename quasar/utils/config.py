@@ -287,6 +287,19 @@ def add_miner_args(cls, parser):
     )
 
     parser.add_argument(
+        "--miner.model_name",
+        type=str,
+        default="Qwen/Qwen3-4B-Instruct-2507",
+        help="The name of the model to use for inference.",
+    )
+    parser.add_argument(
+        "--miner.max_length",
+        type=int,
+        default=32768,
+        help="The maximum sequence length for the model.",
+    )
+
+    parser.add_argument(
         "--miner.performance_tracking",
         action="store_true",
         help="Enable detailed performance tracking and logging",
@@ -370,6 +383,13 @@ def add_validator_args(cls, parser):
         default="opentensor-dev",
     )
 
+    parser.add_argument(
+        "--neuron.use_real_miner",
+        action="store_true",
+        help="If set, uses real bt.dendrite instead of MockDendrite even in --mock mode.",
+        default=False,
+    )
+
     # Validator-specific architecture arguments
     parser.add_argument(
         "--validator.enable_architecture_diversity_tracking",
@@ -413,6 +433,7 @@ def add_validator_args(cls, parser):
         help="Weight for diversity bonus in scoring",
         default=0.1
     )
+
 
 
 def config(cls):

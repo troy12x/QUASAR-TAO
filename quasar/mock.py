@@ -34,6 +34,7 @@ class MockMinerModel:
             
         if self._model is None:
             try:
+                print("🔄 Loading Qwen/Qwen2.5-0.5B-Instruct for mock inference... (might take 1-2 mins)")
                 bt.logging.info("🔄 Loading Qwen/Qwen2.5-0.5B-Instruct for mock inference...")
                 model_name = "Qwen/Qwen2.5-0.5B-Instruct"
                 
@@ -45,8 +46,10 @@ class MockMinerModel:
                     trust_remote_code=True
                 )
                 self._model.eval()
+                print(f"✅ Model loaded successfully on {next(self._model.parameters()).device}")
                 bt.logging.success(f"✅ Model loaded successfully on {next(self._model.parameters()).device}")
             except Exception as e:
+                print(f"❌ Failed to load model: {e}")
                 bt.logging.error(f"❌ Failed to load model: {e}")
                 self._model = None
                 self._tokenizer = None
@@ -54,12 +57,7 @@ class MockMinerModel:
     def generate_response(self, context: str, question: str, max_new_tokens: int = 100) -> str:
         """Generate a response using the loaded model."""
         if self._model is None or self._tokenizer is None:
-            # Fallback to dummy responses
-            return random.choice([
-                "This is a sample answer.",
-                "I don't know.",
-                "The answer is unclear.",
-            ])
+            return "failed to load model"
         
         try:
             # Format prompt
@@ -101,7 +99,22 @@ class MockWallet:
     @property
     def hotkey(self):
         if self._hotkey is None:
-            self._hotkey = bt.Keypair.create_from_mnemonic(bt.Keypair.generate_mnemonic())
+            # Use real Bittensor dev keys (Alice/Bob) to produce valid signatures
+            # Alice = 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+            # Bob   = 5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92Ss8xs6PzW9
+            uri = "//Alice"
+            if self._config and hasattr(self._config, 'wallet') and hasattr(self._config.wallet, 'hotkey'):
+                 if self._config.wallet.hotkey == "miner_hotkey":
+                     uri = "//Bob"
+                 elif self._config.wallet.hotkey == "validator_hotkey":
+                     uri = "//Alice"
+            
+            try:
+                self._hotkey = bt.Keypair.create_from_uri(uri)
+            except Exception:
+                # Fallback to random if URI fails
+                self._hotkey = bt.Keypair.create_from_mnemonic(bt.Keypair.generate_mnemonic())
+                
         return self._hotkey
 
     @property
@@ -185,17 +198,31 @@ class MockSubtensor(bt.MockSubtensor):
     def neuron_for_uid_lite(self, uid, netuid, block=None):
         netuid = int(netuid)
         
-        # Determine hotkey
-        if uid == 0:
-            hotkey = self.validator_hotkey
+        # Determine hotkey - use dynamically calculated addresses
+        if uid == 1:
+            hotkey = self.bob_address # Bob (Miner)
+        elif uid == 0:
+            hotkey = self.alice_address # Alice (Validator)
         else:
             hotkey = f"miner-hotkey-{uid}"
             
         return bt.NeuronInfoLite(
-            netuid=netuid,
-            uid=uid,
             hotkey=hotkey,
             coldkey="mock-coldkey",
+            uid=uid,
+            netuid=netuid,
+            active=1,
+            stake=bt.Balance(100000),
+            stake_dict={},
+            total_stake=bt.Balance(100000),
+            emission=0.0,
+            incentive=0.0,
+            consensus=0.0,
+            validator_trust=0.0,
+            dividends=0.0,
+            last_update=0,
+            validator_permit=True,
+            prometheus_info=None,
             axon_info=bt.AxonInfo(
                 version=1,
                 ip="127.0.0.1",
@@ -204,21 +231,6 @@ class MockSubtensor(bt.MockSubtensor):
                 hotkey=hotkey,
                 coldkey="mock-coldkey",
             ),
-            prometheus_info=None,
-            stake=100000,
-            rank=0,
-            emission=0,
-            active=1,
-            stake_dict={},
-            total_stake=100000,
-            incentive=0,
-            consensus=0,
-            trust=0,
-            dividends=0,
-            last_update=0,
-            validator_permit=True,
-            validator_trust=0,
-            pruning_score=0,
         )
 
     def serve_axon(self, netuid, axon, wait_for_inclusion=False, wait_for_finalization=False, certificate=None):
@@ -232,11 +244,15 @@ class MockSubtensor(bt.MockSubtensor):
     def get_balance(self, address):
         return bt.Balance(1000)
 
-    def __init__(self, netuid, n=16, wallet=None, network="mock"):
+    def __init__(self, netuid, n=2, wallet=None, network="mock"):
         super().__init__(network=network)
         self._start_time = time.time()
         self.netuid = int(netuid)
         self.n = n
+        
+        # Dynamically calculate hotkeys for Alice and Bob to ensure stability across environments
+        self.alice_address = bt.Keypair.create_from_uri("//Alice").ss58_address
+        self.bob_address = bt.Keypair.create_from_uri("//Bob").ss58_address
 
         if wallet is not None:
             self.validator_hotkey = wallet.hotkey.ss58_address
@@ -345,7 +361,7 @@ class MockMetagraph(bt.Metagraph):
         self.sync(subtensor=subtensor)
 
         for axon in self.axons:
-            axon.ip = "127.0.0.0"
+            axon.ip = "127.0.0.1"
             axon.port = 8091
 
         bt.logging.info(f"Metagraph: {self}")
@@ -438,9 +454,12 @@ class MockDendrite(bt.Dendrite):
                     try:
                         model = MockMinerModel()
                         context = getattr(s, 'context', '')
-                        question = getattr(s, 'question', '')
+                        question = getattr(s, 'prompt', getattr(s, 'question', ''))
+                        print(f"🤖 Mock Miner: Generating response for task {getattr(s, 'task_id', 'unknown')}...")
                         s.response = model.generate_response(context, question, max_new_tokens=50)
+                        s.processing_time = time.time() - start_time
                     except Exception as e:
+                        print(f"❌ Mock Miner Generation failed: {e}")
                         bt.logging.debug(f"Model generation failed: {e}")
                         s.response = ""
                 else:

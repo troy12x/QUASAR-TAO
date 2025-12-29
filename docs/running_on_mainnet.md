@@ -31,7 +31,7 @@ After installing `bittensor`, proceed as below:
 In your project directory:
 
 ```bash
-git clone https://github.com/opentensor/bittensor-subnet-template.git 
+git clone https://github.com/opentensor/bittensor-subnet-quasar.git 
 ```
 
 Next, `cd` into `bittensor-subnet-template` repo directory:

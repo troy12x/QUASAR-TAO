@@ -154,7 +154,7 @@ async def run_quick_tests() -> Dict[str, Any]:
     
     # Test 1: Model factory
     try:
-        from template.model_factory import ModelArchitectureFactory
+        from quasar.model_factory import ModelArchitectureFactory
         factory = ModelArchitectureFactory()
         architectures = factory.get_available_architectures()
         
@@ -186,7 +186,7 @@ async def run_quick_tests() -> Dict[str, Any]:
     
     # Test 3: Diversity tracker
     try:
-        from template.validator.diversity_tracker import DiversityTracker
+        from quasar.validator.diversity_tracker import DiversityTracker
         tracker = DiversityTracker()
         
         results["tests_run"].append({"name": "diversity_tracker", "status": "pass"})
@@ -199,7 +199,7 @@ async def run_quick_tests() -> Dict[str, Any]:
     
     # Test 4: Monitoring systems
     try:
-        from template.monitoring import TelemetryCollector, HealthMonitor
+        from quasar.monitoring import TelemetryCollector, HealthMonitor
         
         telemetry = TelemetryCollector()
         health_monitor = HealthMonitor()

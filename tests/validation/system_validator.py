@@ -240,7 +240,7 @@ class SystemValidator:
     async def _check_multi_architecture_support(self) -> Dict[str, Any]:
         """Check multi-architecture support"""
         try:
-            from template.model_factory import ModelArchitectureFactory
+            from quasar.model_factory import ModelArchitectureFactory
             
             factory = ModelArchitectureFactory()
             available_architectures = factory.get_available_architectures()
@@ -308,7 +308,7 @@ class SystemValidator:
     async def _check_diversity_tracking(self) -> Dict[str, Any]:
         """Check diversity tracking system"""
         try:
-            from template.validator.diversity_tracker import DiversityTracker
+            from quasar.validator.diversity_tracker import DiversityTracker
             
             diversity_tracker = DiversityTracker()
             
@@ -353,7 +353,7 @@ class SystemValidator:
     async def _check_miner_validator_communication(self) -> Dict[str, Any]:
         """Check miner-validator communication"""
         try:
-            import template.protocol as protocol
+            import quasar.protocol as protocol
             
             # Test synapse creation
             test_synapse = protocol.InfiniteContextSynapse(
@@ -438,7 +438,7 @@ class SystemValidator:
     async def _check_audit_trail_integrity(self) -> Dict[str, Any]:
         """Check audit trail integrity"""
         try:
-            from template.monitoring.audit_trail import AuditTrailManager
+            from quasar.monitoring.audit_trail import AuditTrailManager
             
             # Create temporary audit manager
             import tempfile
@@ -456,7 +456,7 @@ class SystemValidator:
             await asyncio.sleep(2)
             
             # Test integrity verification
-            from template.monitoring.audit_trail import AuditQuery
+            from quasar.monitoring.audit_trail import AuditQuery
             query = AuditQuery(limit=10)
             events = audit_manager.query_events(query)
             
@@ -489,7 +489,7 @@ class SystemValidator:
     async def _check_sealed_scoring(self) -> Dict[str, Any]:
         """Check sealed scoring harness"""
         try:
-            from template.validator.scoring_harness import ScoringHarness
+            from quasar.validator.scoring_harness import ScoringHarness
             
             scoring_config = {
                 "audit_and_transparency": {
@@ -521,7 +521,7 @@ class SystemValidator:
     async def _check_telemetry_collection(self) -> Dict[str, Any]:
         """Check telemetry collection"""
         try:
-            from template.monitoring.telemetry import TelemetryCollector
+            from quasar.monitoring.telemetry import TelemetryCollector
             
             telemetry = TelemetryCollector()
             telemetry.start_collection()
@@ -553,7 +553,7 @@ class SystemValidator:
     async def _check_health_monitoring(self) -> Dict[str, Any]:
         """Check health monitoring"""
         try:
-            from template.monitoring.health_monitor import HealthMonitor
+            from quasar.monitoring.health_monitor import HealthMonitor
             
             health_monitor = HealthMonitor()
             health_monitor.start_monitoring()

@@ -1,0 +1,84 @@
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
+from .database import Base
+from datetime import datetime
+from pydantic import BaseModel
+from typing import List, Optional
+
+# SQLAlchemy Models
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(String, primary_key=True, index=True)
+    dataset_name = Column(String)
+    task_type = Column(String)
+    context = Column(String)
+    prompt = Column(String)
+    expected_output = Column(String)
+    context_length = Column(Integer)
+    difficulty_level = Column(String)
+    evaluation_metrics = Column(String)  # Stored as comma-separated string
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    results = relationship("Result", back_populates="task")
+
+class Result(Base):
+    __tablename__ = "results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String, ForeignKey("tasks.id"))
+    miner_hotkey = Column(String, index=True)
+    miner_uid = Column(Integer)
+    response_hash = Column(String, index=True)
+    response_text = Column(String)
+    score = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    task = relationship("Task", back_populates="results")
+
+class MinerScore(Base):
+    __tablename__ = "miner_scores"
+
+    hotkey = Column(String, primary_key=True, index=True)
+    score = Column(Float, default=0.0)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# Pydantic Schemas
+class TaskBase(BaseModel):
+    dataset_name: str
+    task_type: str
+    context: str
+    prompt: str
+    expected_output: str
+    context_length: int
+    difficulty_level: str
+    evaluation_metrics: List[str]
+
+class TaskCreate(TaskBase):
+    id: str
+
+class TaskResponse(TaskBase):
+    id: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class ResultBase(BaseModel):
+    task_id: str
+    miner_hotkey: str
+    miner_uid: int
+    response_text: str
+    response_hash: Optional[str] = None # Calculated by API if not provided
+    all_classes: Optional[List[str]] = None
+
+class ResultCreate(ResultBase):
+    pass
+
+class MinerScoreResponse(BaseModel):
+    hotkey: str
+    score: float
+    last_updated: datetime
+
+    class Config:
+        from_attributes = True

@@ -67,7 +67,7 @@ def validate_configurations():
     """Validate subnet configuration files during setup."""
     try:
         # Import here to avoid circular imports during setup
-        from template.utils.config_validator import ConfigValidator
+        from quasar.utils.config_validator import ConfigValidator
         
         # Validate configurations in the current directory
         config_dir = here

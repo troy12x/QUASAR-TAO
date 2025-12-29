@@ -244,7 +244,7 @@ class NeedleHaystackLoader:
         
         # Create needle text using template
         template = random.choice(self.needle_templates.get(needle_type, ["{value}"]))
-        needle_text = template.format(value=needle_value)
+        needle_text = quasar.format(value=needle_value)
         
         return needle_value, needle_text
     

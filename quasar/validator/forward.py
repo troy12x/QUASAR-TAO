@@ -23,9 +23,9 @@ import numpy as np
 from typing import List, Dict, Any
 import bittensor as bt
 
-from template.protocol import InfiniteContextSynapse
-from template.validator.reward import get_rewards, calculate_incentive_distribution
-from template.utils.uids import get_random_uids
+from quasar.protocol import InfiniteContextSynapse
+from quasar.validator.reward import get_rewards, calculate_incentive_distribution
+from quasar.utils.uids import get_random_uids
 
 
 async def forward(self):

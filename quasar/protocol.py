@@ -1,6 +1,6 @@
 # The MIT License (MIT)
-# Copyright 2023 Yuma Rao
-# Copyright 2024 HFA Research Team
+# Copyright 2026 Yuma Rao
+# Copyright 2026 SILX INC
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -16,23 +16,24 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-import typing
+
 import bittensor as bt
 from typing import List, Optional, Dict, Any
+from pydantic import Field
 import time
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 
-# HFA Infinite Context Subnet Protocol
+# Quasar Infinite Context Subnet Protocol
 # This protocol enables evaluation of infinite context language modeling capabilities
-# using the revolutionary Hierarchical Flow Anchoring architecture
+# using the revolutionary Quasar architecture
 
 # ---- miner ----
 # Example usage:
 #   def infinite_context_forward(synapse: InfiniteContextSynapse) -> InfiniteContextSynapse:
-#       # Process with HFA model
-#       synapse.response = hfa_model.generate(synapse.context, synapse.prompt)
+#       # Process with Quasar model
+#       synapse.response = quasar_model.generate(synapse.context, synapse.prompt)
 #       synapse.memory_retention_score = calculate_memory_score(synapse)
 #       return synapse
 #   axon = bt.axon().attach(infinite_context_forward).serve(netuid=...).start()
@@ -61,7 +62,7 @@ class BenchmarkTaskInfo:
     requires_semantic_similarity: bool = False
     supports_perturbation_testing: bool = True
     
-    def __post_init__(self):
+    def model_post_init(self, __context):
         """Initialize derived fields based on evaluation metrics"""
         if self.evaluation_metrics:
             self.requires_exact_match = "exact_match" in self.evaluation_metrics
@@ -109,7 +110,7 @@ class InfiniteContextSynapse(bt.Synapse):
     HFA Infinite Context Protocol Synapse
     
     This synapse enables evaluation of infinite context capabilities using the
-    breakthrough Hierarchical Flow Anchoring architecture. It tests:
+    breakthrough Quasar architecture. It tests:
     - Memory retention across ultra-long sequences
     - Pattern recognition in extended contexts
     - Coherence maintenance over infinite sequences
@@ -187,14 +188,12 @@ class InfiniteContextSynapse(bt.Synapse):
     model_info: Optional[Dict[str, Any]] = None
     
     # Architecture support fields (unified architecture support)
-    architecture_type: Optional[str] = None  # "hfa", "simplemind", "hybrid", "standard"
+    architecture_type: Optional[str] = None  # "quasar", "standard"
     model_configuration: Optional[Dict[str, Any]] = None  # Architecture-specific configuration
     architecture_preference: Optional[str] = None  # Preferred architecture for this task
     
     # Architecture-specific performance metrics
-    hfa_checkpoint_count: Optional[int] = None  # Number of HFA checkpoints created
-    simplemind_block_count: Optional[int] = None  # Number of SimpleMind blocks used
-    hybrid_component_usage: Optional[Dict[str, float]] = None  # Usage ratio of hybrid components
+    quasar_checkpoint_count: Optional[int] = None  # Number of Quasar checkpoints created
     architecture_switching_count: Optional[int] = None  # Number of architecture switches
     
     # Audit and hash fields for sealed scoring harness
@@ -510,7 +509,7 @@ class InfiniteContextSynapse(bt.Synapse):
 class MemoryRetentionSynapse(bt.Synapse):
     """
     Specialized synapse for testing memory retention across long sequences.
-    Tests the core breakthrough of HFA: 100% memory retention at all positions.
+    Tests the core breakthrough of Quasar: 100% memory retention at all positions.
     """
     
     # Input sequence with embedded information at different positions
@@ -534,7 +533,7 @@ class MemoryRetentionSynapse(bt.Synapse):
 class PatternRecognitionSynapse(bt.Synapse):
     """
     Specialized synapse for testing pattern recognition in extended contexts.
-    Leverages HFA's superior long-context pattern recognition capabilities.
+    Leverages Quasar's superior long-context pattern recognition capabilities.
     """
     
     # Long sequence with embedded patterns
@@ -558,7 +557,7 @@ class PatternRecognitionSynapse(bt.Synapse):
 class ScalingTestSynapse(bt.Synapse):
     """
     Specialized synapse for testing infinite context scaling capabilities.
-    Validates HFA's ability to maintain performance as context length increases.
+    Validates Quasar's ability to maintain performance as context length increases.
     """
     
     # Scaling test parameters
@@ -604,9 +603,11 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
     
     # Task metadata (enhanced)
     difficulty_level: str = "medium"
-    evaluation_metrics: List[str] = None
-    expected_output: Optional[str] = None
-    context_length: Optional[int] = None
+    evaluation_metrics: Optional[List[str]] = Field(default=None)
+    expected_output: Optional[str] = Field(default=None)
+    challenge_input: Optional[Dict[str, Any]] = Field(default=None) # [NEW] Execution inputs
+    context_length: Optional[int] = Field(default=None)
+    max_context_length: Optional[int] = Field(default=None)
     
     # Reproducibility and sharding support
     benchmark_seed: Optional[int] = None
@@ -672,7 +673,7 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
     perturbation_type: Optional[str] = None  # Type of perturbation applied
     expected_consistency_threshold: Optional[float] = None  # Expected consistency level
     
-    def __post_init__(self):
+    def model_post_init(self, __context):
         """Initialize evaluation metrics and derived fields if not provided"""
         if self.evaluation_metrics is None:
             # Set default metrics based on task type

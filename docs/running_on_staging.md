@@ -97,7 +97,7 @@ BUILD_BINARY=0 ./scripts/localnet.sh
 `cd` to your project directory and clone the bittensor subnet template repository:
 
 ```bash
-git clone https://github.com/opentensor/bittensor-subnet-template.git
+git clone https://github.com/opentensor/bittensor-subnet-quasar.git
 ```
 
 Navigate to the cloned repository:
