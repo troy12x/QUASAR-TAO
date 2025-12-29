@@ -17,10 +17,10 @@ import quasar
 from quasar.benchmarks.benchmark_loader import BenchmarkLoader
 
 import hashlib
-import models
-import auth
-import scoring
-from database import engine, get_db
+from . import models
+from . import auth
+from . import scoring
+from .database import engine, get_db
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
