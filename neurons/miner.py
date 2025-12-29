@@ -45,6 +45,7 @@ class Miner(BaseMinerNeuron):
         super(Miner, self).__init__(config=config)
         
         bt.logging.info("Initializing Long Context Miner...")
+        print(f"\n🔑 [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
         
         # Initialize device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -88,6 +89,7 @@ class Miner(BaseMinerNeuron):
                 print(f"🗺️ Model Device: {self.model.device}")
                 
             self.model.eval()
+            print(f"\n🔑 [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
         except Exception as e:
             bt.logging.error(f"Failed to load model {self.model_name}: {e}")

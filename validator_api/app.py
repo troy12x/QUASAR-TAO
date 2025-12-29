@@ -229,3 +229,27 @@ def get_miner_stats(hotkey: str, db: Session = Depends(get_db)):
         "ema_score": ema_score,
         "last_updated": datetime.utcnow()
     }
+
+@app.get("/stats/global")
+def get_global_stats(db: Session = Depends(get_db)):
+    """
+    Returns global network statistics for the dashboard.
+    """
+    # 1. Counts
+    total_miners = db.query(models.MinerScore).count()
+    total_submissions = db.query(models.Result).count()
+    accepted = db.query(models.Result).filter(models.Result.score > 0).count()
+    rejected = db.query(models.Result).filter(models.Result.score == 0).count()
+    
+    # 2. Avg Score
+    avg_score = db.query(func.avg(models.Result.score)).scalar() or 0.0
+    
+    return {
+        "total_miners": total_miners,
+        "total_submissions": total_submissions,
+        "accepted": accepted,
+        "rejected": rejected,
+        "approval_rate": (accepted / total_submissions * 100) if total_submissions > 0 else 0.0,
+        "average_score": float(avg_score),
+        "last_updated": datetime.utcnow()
+    }
