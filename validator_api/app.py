@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime
 from typing import List, Optional, Dict
 import uuid
 import sys
@@ -189,3 +191,31 @@ def get_scores(db: Session = Depends(get_db)):
     Used by validators to set weights on-chain.
     """
     return db.query(models.MinerScore).all()
+
+@app.get("/stats/miner/{hotkey}")
+def get_miner_stats(hotkey: str, db: Session = Depends(get_db)):
+    """
+    Returns detailed statistics for a specific miner for the dashboard.
+    """
+    # 1. Basic Counts
+    total = db.query(models.Result).filter(models.Result.miner_hotkey == hotkey).count()
+    accepted = db.query(models.Result).filter(models.Result.miner_hotkey == hotkey, models.Result.score > 0).count()
+    rejected = db.query(models.Result).filter(models.Result.miner_hotkey == hotkey, models.Result.score == 0).count()
+    
+    # 2. Aggregates
+    avg_score = db.query(func.avg(models.Result.score)).filter(models.Result.miner_hotkey == hotkey).scalar() or 0.0
+    
+    # 3. EMA Score (from MinerScore table)
+    miner_score_entry = db.query(models.MinerScore).filter(models.MinerScore.hotkey == hotkey).first()
+    ema_score = miner_score_entry.score if miner_score_entry else 0.0
+
+    return {
+        "hotkey": hotkey,
+        "total_submissions": total,
+        "accepted": accepted,
+        "rejected": rejected,
+        "approval_rate": (accepted / total * 100) if total > 0 else 0.0,
+        "average_score": float(avg_score),
+        "ema_score": ema_score,
+        "last_updated": datetime.utcnow()
+    }

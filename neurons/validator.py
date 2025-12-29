@@ -78,7 +78,7 @@ class Validator(BaseValidatorNeuron):
             }
         })
 
-        self.api_root = getattr(self.config, 'api_root', "http://localhost:8000")
+        self.api_root = getattr(self.config, 'api_root', "https://quasar-subnet.onrender.com")
         bt.logging.info(f"🌐 Validator API Root: {self.api_root}")
         
         # Now properly initialize bucket_scores with correct size
