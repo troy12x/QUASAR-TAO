@@ -116,13 +116,6 @@ def calculate_score(
                 score = metric_fn(response_text, expected_output, all_classes=all_classes)
             else:
                 score = metric_fn(response_text, expected_output)
-        else:
-            # Standard metrics from quasar
-            metric_fn = dataset2metric.get(dataset_name, dataset2metric.get('narrativeqa'))
-            if all_classes:
-                score = metric_fn(response_text, expected_output, all_classes=all_classes)
-            else:
-                score = metric_fn(response_text, expected_output)
     except Exception as e:
         print(f"Scoring error: {e}")
         score = 0.0
