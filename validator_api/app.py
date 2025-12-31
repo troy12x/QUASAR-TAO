@@ -162,7 +162,7 @@ def report_result(
         return {"status": "already_reported", "score": existing_result.score}
 
     # 4. Authoritative Scoring
-    final_score = scoring.calculate_score(
+    final_score, method = scoring.calculate_score(
         response_text=resp_text,
         expected_output=db_task.expected_output,
         dataset_name=db_task.dataset_name,

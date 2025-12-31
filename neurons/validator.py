@@ -86,6 +86,9 @@ class Validator(BaseValidatorNeuron):
         
         # Now properly initialize bucket_scores with correct size
         self.bucket_scores = {b: torch.zeros(self.metagraph.n) for b in BUCKETS}
+        self.cumulative_reward = 0.0
+        self.cumulative_accuracy = 0.0
+        self.bucket_cumulative_rewards = {b: 0.0 for b in BUCKETS}
         
         # 2. State Management
         self.load_state()
@@ -135,7 +138,10 @@ class Validator(BaseValidatorNeuron):
                 "step": self.step,
                 "scores": self.scores,
                 "difficulty_level": self.difficulty_level,
-                "bucket_scores": self.bucket_scores # Persist bucket stats
+                "bucket_scores": self.bucket_scores, # Persist bucket stats
+                "cumulative_reward": self.cumulative_reward,
+                "cumulative_accuracy": self.cumulative_accuracy,
+                "bucket_cumulative_rewards": self.bucket_cumulative_rewards
             }
             torch.save(state, self.config.neuron.full_path + "/state.pt")
             bt.logging.info("💾 State saved.")
@@ -160,6 +166,12 @@ class Validator(BaseValidatorNeuron):
                 loaded_scores = state.get("scores", self.scores)
                 if isinstance(loaded_scores, np.ndarray):
                     self.scores = torch.from_numpy(loaded_scores).float().to(self.device)
+                else:
+                    self.scores = loaded_scores.to(self.device)
+
+                self.cumulative_reward = state.get("cumulative_reward", 0.0)
+                self.cumulative_accuracy = state.get("cumulative_accuracy", 0.0)
+                self.bucket_cumulative_rewards = state.get("bucket_cumulative_rewards", {k: 0.0 for k in BUCKETS.keys()})
                 else:
                     self.scores = loaded_scores.to(self.device)
                     
@@ -277,6 +289,7 @@ class Validator(BaseValidatorNeuron):
                     print("\n📊 --- Miner Performance Breakdown ---")
                     for i, (uid, reward, resp) in enumerate(zip(miner_uids, rewards, responses)):
                         acc = self.last_raw_accuracies[i] if i < len(self.last_raw_accuracies) else 0.0
+                        method = self.last_scoring_methods[i] if hasattr(self, 'last_scoring_methods') and i < len(self.last_scoring_methods) else "unknown"
                         ptime = getattr(resp, 'processing_time', 0.0)
                         status = getattr(resp.dendrite, 'status_message', 'N/A')
                         actual_resp = getattr(resp, 'response', 'N/A')
@@ -285,15 +298,16 @@ class Validator(BaseValidatorNeuron):
                         acc_val = float(acc) if acc is not None else 0.0
                         ptime_val = float(ptime) if ptime is not None else 0.0
                         
-                        print(f"UID {uid:3} | Reward: {r_val:.4f} | Accuracy: {acc_val:.4f} | Time: {ptime_val:.2f}s | {status}")
+                        print(f"UID {uid:3} | Reward: {r_val:.4f} | Accuracy: {acc_val:.4f} ({method}) | Time: {ptime_val:.2f}s | {status}")
                         
                         # Show extracted answer
-                        extracted, method = self._extract_answer(actual_resp)
-                        print(f"        └─ Expected: {task.expected_output} | Extracted: {extracted} ({method})")
+                        extracted, extract_method = self._extract_answer(actual_resp)
+                        print(f"        └─ Expected: {task.expected_output} | Extracted: {extracted} ({extract_method})")
                     
                     avg_reward = sum(rewards) / len(rewards)
+                    total_reward = sum(rewards)
                     avg_accuracy = sum(self.last_raw_accuracies) / len(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
-                    bt.logging.info(f"💰 Rewards: {avg_reward:.4f} | 🎯 Accuracy: {avg_accuracy:.4f} | Top5: {[f'{r:.3f}' for r in rewards[:5]]}")
+                    bt.logging.info(f"💰 Total Reward: {total_reward:.4f} | Avg Reward: {avg_reward:.4f} | 🎯 Avg Accuracy: {avg_accuracy:.4f} | Top5: {[f'{r:.3f}' for r in rewards[:5]]}")
                     print("---------------------------------------\n")
                 else:
                     print("⚠️ No rewards calculated (no miners or all failed).")
@@ -390,6 +404,7 @@ class Validator(BaseValidatorNeuron):
         
         raw_scores = []
         raw_accuracies = []  # Track raw accuracy before multipliers
+        methods = []         # Track method (symbolic vs numeric)
         
         for uid, response in zip(miner_uids, responses):
             if not response or not response.response:
@@ -398,6 +413,7 @@ class Validator(BaseValidatorNeuron):
                 failure_penalty = PENALTY_NO_RESPONSE - (0.1 * self.consecutive_failures[uid]) # Escalating penalty
                 raw_scores.append(failure_penalty)
                 raw_accuracies.append(0.0)
+                methods.append("no_response")
                 continue
             
             # Reset failures if successful response
@@ -470,13 +486,16 @@ class Validator(BaseValidatorNeuron):
                 final_score = score * multiplier
                 
                 raw_scores.append(final_score)
+                methods.append(method)
             except Exception as e:
                 bt.logging.error(f"Scoring error for {uid}: {e}")
                 raw_scores.append(0.0)
                 raw_accuracies.append(0.0)
+                methods.append("error")
 
-        # Store raw accuracy for logging
+        # Store for logging
         self.last_raw_accuracies = raw_accuracies
+        self.last_scoring_methods = methods
         
         # Use RAW SCORES directly (like Omegalabs)
         # This makes rewards EXACTLY proportional to accuracy
@@ -565,10 +584,23 @@ class Validator(BaseValidatorNeuron):
         avg_reward = sum(rewards) / len(rewards) if rewards else 0
         avg_accuracy = sum(self.last_raw_accuracies) / len(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
         
+        # Update Cumulative Metrics
+        step_total_reward = sum(rewards) if rewards else 0
+        step_total_accuracy = sum(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
+        
+        self.cumulative_reward += step_total_reward
+        self.cumulative_accuracy += step_total_accuracy
+        self.bucket_cumulative_rewards[bucket_name] += step_total_reward
+
         # Core Global Metrics (These will always show up in main charts)
         metrics = {
             "reward": avg_reward,
             "accuracy": avg_accuracy,
+            "total_reward": step_total_reward,
+            "total_accuracy": step_total_accuracy,
+            "cumulative_reward": self.cumulative_reward,
+            "cumulative_accuracy": self.cumulative_accuracy,
+            "ema_score_avg": self.scores.mean().item() if hasattr(self, 'scores') else 0.0,
             "step": self.step,
             "context_length": task.context_length,
         }
@@ -576,6 +608,8 @@ class Validator(BaseValidatorNeuron):
         # Per-Bucket Metrics
         metrics[f"rewards/{bucket_name}"] = avg_reward
         metrics[f"accuracy/{bucket_name}"] = avg_accuracy
+        metrics[f"total_reward/{bucket_name}"] = step_total_reward
+        metrics[f"cumulative_reward/{bucket_name}"] = self.bucket_cumulative_rewards[bucket_name]
         
         # Log individual miner metrics
         if responses:
