@@ -82,7 +82,14 @@ class BaseMinerNeuron(BaseNeuron):
         self.should_exit: bool = False
         self.is_running: bool = False
         self.thread: Union[threading.Thread, None] = None
-        self.lock = asyncio.Lock()
+        self._lock = None # Defer lock creation until run() or forward()
+        self.last_sync_block = 0
+
+    @property
+    def lock(self):
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     def run(self):
         """
@@ -134,7 +141,7 @@ class BaseMinerNeuron(BaseNeuron):
         try:
             while not self.should_exit:
                 while (
-                    self.block - self.metagraph.last_update[self.uid]
+                    self.block - self.last_sync_block
                     < self.config.neuron.epoch_length
                 ):
                     # Wait before checking again.
@@ -146,6 +153,7 @@ class BaseMinerNeuron(BaseNeuron):
 
                 # Sync metagraph and potentially set weights.
                 self.sync()
+                self.last_sync_block = self.block
                 self.step += 1
 
         # If someone intentionally stops the miner, it'll safely terminate operations.

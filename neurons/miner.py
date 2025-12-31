@@ -185,7 +185,7 @@ DO NOT include any text after the box."""}
                 generated_ids = self.model.generate(
                     model_inputs.input_ids,
                     attention_mask=model_inputs.attention_mask,
-                    max_new_tokens=4096, # High capacity yet stable for 128k context
+                    max_new_tokens=512, # High capacity yet stable for 128k context
                     do_sample=True,
                     temperature=0.1,
                     top_p=0.9,

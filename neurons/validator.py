@@ -27,6 +27,7 @@ import quasar
 from quasar.base.validator import BaseValidatorNeuron
 from quasar.benchmarks.benchmark_loader import BenchmarkLoader
 from quasar.benchmarks.metrics import dataset2metric
+from quasar.utils.system_metrics import get_system_metrics
 
 # --- Constants ---
 WANDB_PROJECT = "quasar-long-context-subnet"
@@ -65,17 +66,18 @@ class Validator(BaseValidatorNeuron):
         # Initialize tracking variables BEFORE super().__init__() 
         # because base class calls save_state() during sync()
         self.difficulty_level = "medium"
-        self.bucket_scores = {}  # Will be properly initialized after metagraph exists
+        self.bucket_scores = {} 
+        self.cumulative_reward = 0.0
+        self.cumulative_accuracy = 0.0
+        self.bucket_cumulative_rewards = {} # Empty until buckets exist
         
         super(Validator, self).__init__(config=config)
         bt.logging.info("🚀 Initializing Professional Long Context Validator...")
         
         # 1. Load Benchmarks
         self.benchmark_loader = BenchmarkLoader(config={
-            'mrcr': {
-                'enabled': True,
-                'n_needles_range': [2, 4, 8]
-            }
+            'mrcr': {'enabled': True, 'n_needles_range': [2, 4, 8]},
+            'longbench': {'enabled': True}
         })
 
         self.api_root = getattr(self.config, 'api_root', "https://quasar-subnet.onrender.com")
@@ -86,8 +88,6 @@ class Validator(BaseValidatorNeuron):
         
         # Now properly initialize bucket_scores with correct size
         self.bucket_scores = {b: torch.zeros(self.metagraph.n) for b in BUCKETS}
-        self.cumulative_reward = 0.0
-        self.cumulative_accuracy = 0.0
         self.bucket_cumulative_rewards = {b: 0.0 for b in BUCKETS}
         
         # 2. State Management
@@ -97,7 +97,13 @@ class Validator(BaseValidatorNeuron):
         self.init_wandb()
         
         # 4. Concurrency Control
-        self.semaphore = asyncio.Semaphore(10) # Limit concurrent heavy ops if needed
+        self._semaphore = None
+
+    @property
+    def semaphore(self):
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(10)
+        return self._semaphore
 
     def init_wandb(self):
         """Initialize Weights & Biases logging."""
@@ -171,15 +177,20 @@ class Validator(BaseValidatorNeuron):
 
                 self.cumulative_reward = state.get("cumulative_reward", 0.0)
                 self.cumulative_accuracy = state.get("cumulative_accuracy", 0.0)
-                self.bucket_cumulative_rewards = state.get("bucket_cumulative_rewards", {k: 0.0 for k in BUCKETS.keys()})
+                # Safe merge for bucket cumulative rewards
+                loaded_bucket_rewards = state.get("bucket_cumulative_rewards", {})
+                for k, v in loaded_bucket_rewards.items():
+                    if k in self.bucket_cumulative_rewards:
+                        self.bucket_cumulative_rewards[k] = v
                     
                 self.difficulty_level = state.get("difficulty_level", "medium")
                 loaded_buckets = state.get("bucket_scores", {})
                 for k, v in loaded_buckets.items():
-                    if isinstance(v, np.ndarray):
-                        self.bucket_scores[k] = torch.from_numpy(v).float().to(self.device)
-                    else:
-                        self.bucket_scores[k] = v.to(self.device)
+                    if k in self.bucket_scores:
+                        if isinstance(v, np.ndarray):
+                            self.bucket_scores[k] = torch.from_numpy(v).float().to(self.device)
+                        else:
+                            self.bucket_scores[k] = v.to(self.device)
                 
                 bt.logging.success("💾 State loaded successfully.")
         except Exception as e:
@@ -212,6 +223,9 @@ class Validator(BaseValidatorNeuron):
     async def forward(self):
         """Main Validation Loop"""
         bt.logging.info("➡️ Entering forward loop...")
+        bt.logging.info("\n" + "═"*50)
+        bt.logging.info("➡️  [VALIDATOR] STARTING NEW FORWARD CYCLE...")
+        bt.logging.info("═"*50)
         try:
             async with self.semaphore: # Limit concurrency
                 # 1. Task Gen (Fetch from API)
@@ -237,12 +251,13 @@ class Validator(BaseValidatorNeuron):
                             task = local_task
 
                 if not task: 
-                    print("⚠️ No task generated, skipping step.")
+                    bt.logging.warning("⚠️ No task generated, skipping step.")
+                    print("⚠️  [VALIDATOR] Task Generation Failed!")
                     return
 
                 # 2. Context Bucket logic
                 bucket_name = self.get_bucket(task.context_length)
-                print(f"📋 Task: {task.task_id} [{bucket_name}] | Len: {task.context_length}")
+                bt.logging.success(f"📋 Task Loaded: {task.task_id} [{bucket_name}] | Length: {task.context_length}")
 
                 # 3. Query
                 miner_uids = self.get_random_miners(self.config.neuron.sample_size)
@@ -259,18 +274,28 @@ class Validator(BaseValidatorNeuron):
                 )
                 
                 # Cooldown/Stagger (Prevents ServerDisconnectedError on local systems)
-                await asyncio.sleep(25) 
+                await asyncio.sleep(5) 
                 
                 print(f"📡 [VALIDATOR] Sending Light Synapse (context=None, prompt=None) to {len(miner_uids)} miners...")
                 print(f"📊 [VALIDATOR] Synapse ID: {synapse.task_id} | Task Type: {synapse.task_type}")
-                
                 try:
+                    # Dynamic Timeout: 90s floor + 90s per 100k tokens
+                    # Aligned with Omega Labs standard floor. Safety fallback to 90.
+                    timeout_floor = getattr(self.config.neuron, 'timeout_floor', 90)
+                    if timeout_floor is None: timeout_floor = 90
+                    
+                    ctx_len = getattr(task, 'context_length', 0) or 0
+                    timeout = timeout_floor + (ctx_len // 100_000) * 90
+                    timeout = min(max(timeout, timeout_floor), 1800) # Clamp between floor and 30m
+                    
+                    bt.logging.info(f"⏳ [VALIDATOR] Querying miners (Timeout: {timeout}s)...")
                     responses = await self.dendrite(
                         axons=[self.metagraph.axons[uid] for uid in miner_uids],
                         synapse=synapse,
-                        deserialize=False, # We want the full synapse object for metadata and .response
-                        timeout=3600 # 1 hour timeout to allow for very long generation
+                        deserialize=False, 
+                        timeout=timeout
                     )
+                    bt.logging.success(f"📥 [VALIDATOR] Received {len([r for r in responses if r.response])} valid responses.")
                 except Exception as e:
                     print(f"❌ [VALIDATOR] Dendrite error details: {type(e).__name__} - {str(e)}")
                     if "ServerDisconnectedError" in str(e) or "Disconnected" in str(e):
@@ -280,31 +305,32 @@ class Validator(BaseValidatorNeuron):
                     return # Skip scoring for this failed round
 
                 # 4. Scoring
+                bt.logging.info("🧮 Starting scoring for received responses...")
                 rewards = self.score_responses(task, responses, miner_uids)
                 
                 # Log individual metrics for transparency
                 if rewards:
-                    print("\n📊 --- Miner Performance Breakdown ---")
-                    for i, (uid, reward, resp) in enumerate(zip(miner_uids, rewards, responses)):
-                        acc = self.last_raw_accuracies[i] if i < len(self.last_raw_accuracies) else 0.0
-                        method = self.last_scoring_methods[i] if hasattr(self, 'last_scoring_methods') and i < len(self.last_scoring_methods) else "unknown"
-                        ptime = getattr(resp, 'processing_time', 0.0)
-                        status = getattr(resp.dendrite, 'status_message', 'N/A')
-                        actual_resp = getattr(resp, 'response', 'N/A')
-                        # Ensure all values are safe for formatting
-                        r_val = float(reward) if reward is not None else 0.0
-                        acc_val = float(acc) if acc is not None else 0.0
-                        ptime_val = float(ptime) if ptime is not None else 0.0
-                        
-                        print(f"UID {uid:3} | Reward: {r_val:.4f} | Accuracy: {acc_val:.4f} ({method}) | Time: {ptime_val:.2f}s | {status}")
-                        
-                        # Show extracted answer
-                        extracted, extract_method = self._extract_answer(actual_resp)
-                        print(f"        └─ Expected: {task.expected_output} | Extracted: {extracted} ({extract_method})")
-                    
-                    avg_reward = sum(rewards) / len(rewards)
                     total_reward = sum(rewards)
                     avg_accuracy = sum(self.last_raw_accuracies) / len(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
+                    
+                    # Log Summary Table
+                    print("\n" + "="*80)
+                    print(f"📊 STEP {self.step} SUMMARY | Project: {WANDB_PROJECT}")
+                    print("="*80)
+                    print(f"{'UID':<5} | {'Reward':<10} | {'Accuracy':<10} | {'Method':<15} | {'Time(s)':<8} | {'Status'}")
+                    print("-" * 80)
+                    for i, uid in enumerate(miner_uids):
+                        acc = self.last_raw_accuracies[i] if i < len(self.last_raw_accuracies) else 0.0
+                        method = self.last_scoring_methods[i] if hasattr(self, 'last_scoring_methods') and i < len(self.last_scoring_methods) else "unknown"
+                        ptime = getattr(responses[i], 'processing_time', 0.0)
+                        status = getattr(responses[i].dendrite, 'status_message', 'N/A')
+                        print(f"{uid:<5} | {rewards[i]:<10.4f} | {acc:<10.3f} | {method:<15} | {ptime:<8.2f} | {status}")
+                    
+                    sys_m = get_system_metrics()
+                    print("-" * 80)
+                    print(f"💰 STEP REWARD: {total_reward:.4f} | 🎯 STEP ACC: {avg_accuracy:.4f} | 💾 RAM: {sys_m.get('system/ram_percent', 0):.1f}%")
+                    print("="*80 + "\n")
+                    
                     bt.logging.info(f"💰 Total Reward: {total_reward:.4f} | Avg Reward: {avg_reward:.4f} | 🎯 Avg Accuracy: {avg_accuracy:.4f} | Top5: {[f'{r:.3f}' for r in rewards[:5]]}")
                     print("---------------------------------------\n")
                 else:
@@ -390,11 +416,18 @@ class Validator(BaseValidatorNeuron):
         for name, (low, high) in BUCKETS.items():
             if low <= length < high:
                 return name
-        return "infinity"
+        return "2M" # Fallback to the largest defined bucket
 
     def get_random_miners(self, k: int):
         uids = [uid for uid in range(self.metagraph.n) if self.metagraph.axons[uid].is_serving and uid != self.uid]
-        return random.sample(uids, min(k, len(uids))) if uids else []
+        bt.logging.info(f"🔍 Found {len(uids)} serving miners in metagraph.")
+        
+        if not uids:
+            return []
+            
+        selected = random.sample(uids, min(k, len(uids)))
+        bt.logging.info(f"🎯 Selected UIDs for query: {selected}")
+        return selected
 
     def score_responses(self, task, responses, miner_uids):
         rewards = []
@@ -491,7 +524,7 @@ class Validator(BaseValidatorNeuron):
                 raw_accuracies.append(0.0)
                 methods.append("error")
 
-        # Store for logging
+        # Store for logging (Ensure these are cleared per step)
         self.last_raw_accuracies = raw_accuracies
         self.last_scoring_methods = methods
         
@@ -598,10 +631,13 @@ class Validator(BaseValidatorNeuron):
             "total_accuracy": step_total_accuracy,
             "cumulative_reward": self.cumulative_reward,
             "cumulative_accuracy": self.cumulative_accuracy,
-            "ema_score_avg": self.scores.mean().item() if hasattr(self, 'scores') else 0.0,
+            "ema_score_avg": self.scores.mean().item() if isinstance(self.scores, torch.Tensor) else float(self.scores.mean()),
             "step": self.step,
             "context_length": task.context_length,
         }
+        
+        # Add System Metrics
+        metrics.update(get_system_metrics())
         
         # Per-Bucket Metrics
         metrics[f"rewards/{bucket_name}"] = avg_reward
@@ -623,8 +659,6 @@ class Validator(BaseValidatorNeuron):
 
 # Entry point
 if __name__ == "__main__":
-    with Validator() as validator:
-        while True:
-            bt.logging.info(f"Validator running... step: {validator.step}")
-            time.sleep(60)
+    validator = Validator()
+    validator.run()
 

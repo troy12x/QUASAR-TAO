@@ -28,7 +28,7 @@ wheel>=0.40.0
 packaging>=23.0
 
 # Optional: For enhanced performance
-accelerate>=0.20.0
+accelerate>=0.21.0
 optimum>=1.8.0
 
 # LongBench Dependencies

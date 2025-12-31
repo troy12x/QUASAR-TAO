@@ -39,6 +39,7 @@ class BenchmarkLoader:
         num_tasks: int = 1, 
         benchmark_types: Optional[List[str]] = None,
         difficulty: Optional[str] = None,
+        min_context_length: Optional[int] = None,
         max_context_length: Optional[int] = None
     ) -> List[BenchmarkTask]:
         """
@@ -49,29 +50,29 @@ class BenchmarkLoader:
         
         for b_type in types_to_load:
             if b_type == 'longbench':
-                tasks.extend(self._load_longbench_tasks(num_tasks, difficulty, max_context_length))
+                tasks.extend(self._load_longbench_tasks(num_tasks, difficulty, min_context_length, max_context_length))
             elif b_type == 'synthetic':
-                 tasks.extend(self._generate_synthetic_tasks(num_tasks, difficulty, max_context_length))
+                 tasks.extend(self._generate_synthetic_tasks(num_tasks, difficulty, min_context_length, max_context_length))
         
         # Shuffle and return requested amount
         random.shuffle(tasks)
         return tasks[:num_tasks]
 
 
-    def _load_longbench_tasks(self, count: int, difficulty: Optional[str] = None, max_ctx: Optional[int] = None) -> List[BenchmarkTask]:
+    def _load_longbench_tasks(self, count: int, difficulty: Optional[str] = None, min_ctx: Optional[int] = None, max_ctx: Optional[int] = None) -> List[BenchmarkTask]:
         """Internal: Load contextual execution tasks."""
         loaded_tasks = []
         for _ in range(count):
             # Use the new ContextualNeedleLoader
-            task = self.real_loader.get_sample(max_ctx)
+            task = self.real_loader.get_sample(min_ctx, max_ctx)
             if task:
                 loaded_tasks.append(task)
                 
         return loaded_tasks
 
-    def _generate_synthetic_tasks(self, count: int, difficulty: Optional[str], max_ctx: Optional[int] = None) -> List[BenchmarkTask]:
+    def _generate_synthetic_tasks(self, count: int, difficulty: Optional[str], min_ctx: Optional[int] = None, max_ctx: Optional[int] = None) -> List[BenchmarkTask]:
         # Redirect to the main loader for now to enforce the new protocol everywhere
-        return self._load_longbench_tasks(count, difficulty, max_ctx)
+        return self._load_longbench_tasks(count, difficulty, min_ctx, max_ctx)
 
 class ContextualNeedleLoader:
     """
@@ -217,9 +218,15 @@ class ContextualNeedleLoader:
             source="contextual_needle_generator_v4"
         )
         
-    def get_sample(self, max_ctx: Optional[int] = None) -> BenchmarkTask:
-        # Default to the requested 125k - 1M range
-        base_len = random.randint(125000, 1000000)
-        target_len = min(max_ctx, base_len) if max_ctx else base_len
+    def get_sample(self, min_ctx: Optional[int] = None, max_ctx: Optional[int] = None) -> BenchmarkTask:
+        # Default to a reasonable range if not specified
+        low = min_ctx if min_ctx is not None else 125000
+        high = max_ctx if max_ctx is not None else 1000000
+        
+        # Ensure low doesn't exceed high
+        if low > high:
+            low = high // 2
+            
+        target_len = random.randint(low, high)
         
         return self.generate_task(n_distractors=10 if target_len > 50000 else 4, target_len=target_len)

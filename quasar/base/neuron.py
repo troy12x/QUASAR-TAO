@@ -123,6 +123,8 @@ class BaseNeuron(ABC):
         bt.logging.info(f"📋 Subtensor: {self.subtensor} (Type: {type(self.subtensor)})")
         bt.logging.info(f"📋 Metagraph: {self.metagraph}")
 
+        self.step = 0
+
         # Check if the miner is registered on the Bittensor network before proceeding further.
         print("🔍 [BaseNeuron] Checking registration...")
         self.check_registered()
@@ -135,7 +137,6 @@ class BaseNeuron(ABC):
         bt.logging.info(
             f"Running neuron on subnet: {self.config.netuid} with uid {self.uid} using network: {self.subtensor.chain_endpoint}"
         )
-        self.step = 0
 
     @abstractmethod
     async def forward(self, synapse: bt.Synapse) -> bt.Synapse:
@@ -150,7 +151,9 @@ class BaseNeuron(ABC):
         Wrapper for synchronizing the state of the network for the given miner or validator.
         """
         # Ensure miner or validator hotkey is still registered on the network.
-        self.check_registered()
+        # Only check every 100 steps to prevent spamming the logs/network.
+        if self.step % 100 == 0:
+            self.check_registered()
 
         if self.should_sync_metagraph():
             self.resync_metagraph()
@@ -163,9 +166,11 @@ class BaseNeuron(ABC):
 
     def check_registered(self):
         # --- Check for registration.
-        bt.logging.info("🔍 Checking if hotkey is registered on network...")
-        bt.logging.info(f"   Hotkey: {self.wallet.hotkey.ss58_address}")
-        bt.logging.info(f"   Netuid: {self.config.netuid}")
+        log_level = bt.logging.info if self.step % 100 == 0 else bt.logging.trace
+        
+        log_level("🔍 Checking if hotkey is registered on network...")
+        log_level(f"   Hotkey: {self.wallet.hotkey.ss58_address}")
+        log_level(f"   Netuid: {self.config.netuid}")
         
         if not self.subtensor.is_hotkey_registered(
             netuid=self.config.netuid,
