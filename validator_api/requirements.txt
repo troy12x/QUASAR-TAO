@@ -11,3 +11,4 @@ fuzzywuzzy
 python-Levenshtein
 datasets
 psycopg2-binary
+math-verify

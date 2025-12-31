@@ -54,13 +54,12 @@ def calculate_score(
     dataset_name: str, 
     context_length: int,
     all_classes: Optional[list] = None
-) -> float:
+) -> Tuple[float, str]:
     """
-    Calculates the score based on production metrics and context length multipliers.
-    Now supports math-verify for symbolic equivalence and long-tail partial rewards.
+    Calculates (score, method_label).
     """
     if not response_text:
-        return 0.0
+        return 0.0, "none(empty)"
 
     # 1. Determine base score using dataset-specific metrics
     score = 0.0
@@ -85,21 +84,22 @@ def calculate_score(
                     if verify(m_expr, t_expr):
                         # 100% Correct Match (Symbolic)
                         score = 1.0
+                        method = "symbolic"
                     else:
                         # Failed symbolic? Use long-tail numeric fallback if possible
                         if miner_val_raw is not None and target_val is not None:
                             error = abs(miner_val_raw - target_val)
                             denom = max(abs(target_val), 1e-9)
                             rel_error = error / denom
-                            # Formula: 1 / (1 + rel_error)
-                            # User wants floor of ~0.1 for any ballpark attempt
                             score = max(0.1, 1.0 / (1.0 + rel_error))
+                            method = "numeric(rel_error)"
                 elif miner_val_raw is not None and target_val is not None:
                     # Fallback to standard numeric if parsing fails
                     error = abs(miner_val_raw - target_val)
                     denom = max(abs(target_val), 1e-9)
                     rel_error = error / denom
                     score = max(0.1, 1.0 / (1.0 + rel_error))
+                    method = "numeric(rel_error)"
             except Exception as e:
                 # Basic Reciprocal Decay Fallback (If math-verify not installed or fails)
                 if miner_val_raw is not None and target_val is not None:
@@ -107,6 +107,15 @@ def calculate_score(
                     denom = max(abs(target_val), 1e-9)
                     rel_error = error / denom
                     score = max(0.1, 1.0 / (1.0 + rel_error))
+                    method = "numeric(rel_error)"
+        else:
+            # Standard metrics from quasar
+            method = dataset_name
+            metric_fn = dataset2metric.get(dataset_name, dataset2metric.get('narrativeqa'))
+            if all_classes:
+                score = metric_fn(response_text, expected_output, all_classes=all_classes)
+            else:
+                score = metric_fn(response_text, expected_output)
         else:
             # Standard metrics from quasar
             metric_fn = dataset2metric.get(dataset_name, dataset2metric.get('narrativeqa'))
@@ -129,4 +138,4 @@ def calculate_score(
             break
     
     multiplier = REWARD_MULTIPLIERS.get(bucket, 1.0)
-    return float(score * multiplier)
+    return float(score * multiplier), method

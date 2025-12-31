@@ -422,6 +422,7 @@ class Validator(BaseValidatorNeuron):
                             if m_expr and t_expr:
                                 if verify(m_expr, t_expr):
                                     score = 1.0
+                                    method = "symbolic"
                                 else:
                                     if miner_val_raw is not None and target_val is not None:
                                         error = abs(miner_val_raw - target_val)
@@ -429,6 +430,7 @@ class Validator(BaseValidatorNeuron):
                                         rel_error = error / denom
                                         # Reciprocal Decay with 0.1 floor for any attempt
                                         score = max(0.1, 1.0 / (1.0 + rel_error))
+                                        method = "numeric(rel_error)"
                                     else:
                                         score = 0.0
                             elif miner_val_raw is not None and target_val is not None:
@@ -437,6 +439,7 @@ class Validator(BaseValidatorNeuron):
                                 denom = max(abs(target_val), 1e-9)
                                 rel_error = error / denom
                                 score = max(0.1, 1.0 / (1.0 + rel_error))
+                                method = "numeric(rel_error)"
                             else:
                                 score = 0.0
                         except Exception as e:
@@ -446,6 +449,7 @@ class Validator(BaseValidatorNeuron):
                                 denom = max(abs(target_val), 1e-9)
                                 rel_error = error / denom
                                 score = max(0.1, 1.0 / (1.0 + rel_error))
+                                method = "numeric(rel_error)"
                             else:
                                 score = 0.0
                     except:
