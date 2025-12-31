@@ -172,8 +172,6 @@ class Validator(BaseValidatorNeuron):
                 self.cumulative_reward = state.get("cumulative_reward", 0.0)
                 self.cumulative_accuracy = state.get("cumulative_accuracy", 0.0)
                 self.bucket_cumulative_rewards = state.get("bucket_cumulative_rewards", {k: 0.0 for k in BUCKETS.keys()})
-                else:
-                    self.scores = loaded_scores.to(self.device)
                     
                 self.difficulty_level = state.get("difficulty_level", "medium")
                 loaded_buckets = state.get("bucket_scores", {})
