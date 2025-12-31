@@ -79,6 +79,9 @@ class Validator(BaseValidatorNeuron):
         })
 
         self.api_root = getattr(self.config, 'api_root', "https://quasar-subnet.onrender.com")
+        if "localhost" in self.api_root or "127.0.0.1" in self.api_root:
+            self.api_root = "https://quasar-subnet.onrender.com"
+        print(f"📡 [VALIDATOR] Active API Root: {self.api_root}")
         bt.logging.info(f"🌐 Validator API Root: {self.api_root}")
         
         # Now properly initialize bucket_scores with correct size
@@ -119,6 +122,8 @@ class Validator(BaseValidatorNeuron):
                 allow_val_change=True
             )
             bt.logging.success(f"✅ WandB initialized: {run_name} (entity: {wandb_entity or 'default'})")
+            if self.wandb_run:
+                print(f"📊 [WANDB] View charts at: {self.wandb_run.get_url()}")
         except Exception as e:
             bt.logging.warning(f"❌ Failed to init WandB: {e}. Running without it.")
             self.wandb_run = None
@@ -242,6 +247,9 @@ class Validator(BaseValidatorNeuron):
                     difficulty_level=task.difficulty_level,
                     evaluation_metrics=None # Trigger post_init logic correctly
                 )
+                
+                # Cooldown/Stagger (Prevents ServerDisconnectedError on local systems)
+                await asyncio.sleep(25) 
                 
                 print(f"📡 [VALIDATOR] Sending Light Synapse (context=None, prompt=None) to {len(miner_uids)} miners...")
                 print(f"📊 [VALIDATOR] Synapse ID: {synapse.task_id} | Task Type: {synapse.task_type}")
@@ -397,25 +405,49 @@ class Validator(BaseValidatorNeuron):
             
             try:
                 if task.dataset_name in ["quasar_execution_v1", "quasar_execution_v3"]:
-                    # Execution Scoring: Continuous numeric match (with linear decay)
+                    # --- Advanced Math Scoring ---
                     try:
-                        miner_val, method = self._extract_answer(response.response)
-                        target_val = float(task.expected_output)
-                        
-                        if miner_val is not None:
-                            error = abs(miner_val - target_val)
-                            denom = max(abs(target_val), 1e-9)
-                            rel_error = error / denom
+                        miner_val_raw, method = self._extract_answer(response.response)
+                        try:
+                            target_val = float(task.expected_output)
+                        except:
+                            target_val = None
+
+                        # Attempt Symbolic Verification with math-verify
+                        try:
+                            from math_verify import parse, verify
+                            m_expr = parse(response.response)
+                            t_expr = parse(task.expected_output)
                             
-                            if rel_error < 0.001: # 0.1% tolerance for full credit
-                                score = 1.0
-                            elif rel_error < 0.1: # Up to 10% error for partial credit
-                                # Linear decay from 1.0 down to 0.1
-                                score = max(0.1, 1.0 - (rel_error * 9))
+                            if m_expr and t_expr:
+                                if verify(m_expr, t_expr):
+                                    score = 1.0
+                                else:
+                                    if miner_val_raw is not None and target_val is not None:
+                                        error = abs(miner_val_raw - target_val)
+                                        denom = max(abs(target_val), 1e-9)
+                                        rel_error = error / denom
+                                        # Reciprocal Decay with 0.1 floor for any attempt
+                                        score = max(0.1, 1.0 / (1.0 + rel_error))
+                                    else:
+                                        score = 0.0
+                            elif miner_val_raw is not None and target_val is not None:
+                                # Fallback to standard numeric
+                                error = abs(miner_val_raw - target_val)
+                                denom = max(abs(target_val), 1e-9)
+                                rel_error = error / denom
+                                score = max(0.1, 1.0 / (1.0 + rel_error))
                             else:
                                 score = 0.0
-                        else:
-                            score = 0.0
+                        except Exception as e:
+                            # Basic Reciprocal Decay Fallback
+                            if miner_val_raw is not None and target_val is not None:
+                                error = abs(miner_val_raw - target_val)
+                                denom = max(abs(target_val), 1e-9)
+                                rel_error = error / denom
+                                score = max(0.1, 1.0 / (1.0 + rel_error))
+                            else:
+                                score = 0.0
                     except:
                         score = 0.0
                 elif task.dataset_name == "grid_search": # Example placeholder
@@ -457,22 +489,35 @@ class Validator(BaseValidatorNeuron):
         return rewards_tensor.tolist()
 
     def _extract_answer(self, text: str) -> Tuple[Union[float, None], str]:
-        """Extract numeric answer from text, handling \\boxed{} and CoT. Returns (value, method)."""
+        """Extract numeric answer from text, handling <think> blocks and \\boxed{}."""
         if text is None:
             return None, "none(empty)"
             
         try:
             import re
             text = text.strip()
-            # 1. Try \\boxed{val}
-            boxed_match = re.search(r"\\boxed\{([0-9\.]+)\}", text)
-            if boxed_match:
-                return float(boxed_match.group(1)), "boxed"
             
-            # 2. Try finding the LAST number in the text
-            nums = re.findall(r"[-+]?\d*\.\d+|\d+", text)
+            # 1. Strip <think> blocks if present
+            # This prevents picking up reasoning steps as the final answer
+            text_without_think = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+            search_text = text_without_think if text_without_think else text
+            
+            # 2. Try \\boxed{val}
+            # Handle possible spaces, LaTeX artifacts, and commas
+            boxed_match = re.search(r"\\boxed\{\s*([-+]?[0-9\.,]+)\s*\}", search_text)
+            if boxed_match:
+                val_str = boxed_match.group(1).replace(',', '') 
+                return float(val_str), "boxed"
+            
+            # 3. Try finding the LAST number in the text (prioritize text outside thinking blocks)
+            nums = re.findall(r"[-+]?\d*\.\d+|\d+", search_text)
             if nums:
                 return float(nums[-1]), f"last_num({nums[-1]})"
+            
+            # 4. Fallback search (find ANY number in the entire text if nothing else worked)
+            all_nums = re.findall(r"[-+]?[0-9\.]+", text)
+            if all_nums:
+                return float(all_nums[-1]), f"global_last({all_nums[-1]})"
                 
             return None, "none"
         except Exception as e:
@@ -516,23 +561,28 @@ class Validator(BaseValidatorNeuron):
         avg_reward = sum(rewards) / len(rewards) if rewards else 0
         avg_accuracy = sum(self.last_raw_accuracies) / len(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
         
+        # Core Global Metrics (These will always show up in main charts)
         metrics = {
+            "reward": avg_reward,
+            "accuracy": avg_accuracy,
             "step": self.step,
-            f"rewards/{bucket_name}": avg_reward,
-            f"accuracy/{bucket_name}": avg_accuracy,
-            "avg_accuracy": avg_accuracy,
             "context_length": task.context_length,
-            "global_difficulty": self.difficulty_level
         }
         
-        # Log individual miner metrics to tables/plots if provided
+        # Per-Bucket Metrics
+        metrics[f"rewards/{bucket_name}"] = avg_reward
+        metrics[f"accuracy/{bucket_name}"] = avg_accuracy
+        
+        # Log individual miner metrics
         if responses:
             for i, uid in enumerate(miner_uids):
-                metrics[f"miner/{uid}/reward"] = rewards[i]
-                metrics[f"miner/{uid}/accuracy"] = self.last_raw_accuracies[i] if i < len(self.last_raw_accuracies) else 0.0
-                metrics[f"miner/{uid}/time"] = getattr(responses[i], 'processing_time', 0.0)
+                metrics[f"miner_reward/uid_{uid}"] = rewards[i]
+                metrics[f"miner_accuracy/uid_{uid}"] = self.last_raw_accuracies[i] if i < len(self.last_raw_accuracies) else 0.0
+                metrics[f"miner_time/uid_{uid}"] = getattr(responses[i], 'processing_time', 0.0)
 
-        wandb.log(metrics)
+        # Use commit=True to ensure it's sent immediately and increment wandb step
+        wandb.log(metrics, step=self.step)
+        bt.logging.debug(f"Logged to WandB for step {self.step}")
 
 
 # Entry point

@@ -257,7 +257,7 @@ def add_miner_args(cls, parser):
     parser.add_argument(
         "--miner.model_name",
         type=str,
-        default="Qwen/Qwen3-4B-Instruct-2507",
+        default="Qwen/Qwen3-4B-Thinking-2507",
         help="The name of the model to use for inference.",
     )
     parser.add_argument(

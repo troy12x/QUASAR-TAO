@@ -57,6 +57,7 @@ def calculate_score(
 ) -> float:
     """
     Calculates the score based on production metrics and context length multipliers.
+    Now supports math-verify for symbolic equivalence and long-tail partial rewards.
     """
     if not response_text:
         return 0.0
@@ -65,25 +66,47 @@ def calculate_score(
     score = 0.0
     try:
         if dataset_name in ["quasar_execution_v1", "quasar_execution_v3"]:
-            # Execution Scoring: Exact numeric match (with small tolerance)
-            miner_val, _ = extract_answer(response_text)
-            target_val = float(expected_output)
-            
-            if miner_val is not None:
-                error = abs(miner_val - target_val)
-                denom = max(abs(target_val), 1e-9)
-                rel_error = error / denom
+            # --- Advanced Math Scoring ---
+            miner_val_raw, method = extract_answer(response_text)
+            try:
+                target_val = float(expected_output)
+            except:
+                target_val = None
+
+            # Attempt Symbolic Verification with math-verify
+            try:
+                from math_verify import parse, verify
+                # 1. We try to parse the expressions symmetrically
+                # If both are valid math expressions, verify equivalence
+                m_expr = parse(response_text)
+                t_expr = parse(expected_output)
                 
-                if rel_error < 0.001: # 0.1% tolerance for full credit
-                    score = 1.0
-                elif rel_error < 0.1: # Up to 10% error for partial credit
-                    # Linear decay from 1.0 down to 0.1
-                    # At rel_error=0.1, score is ~0.1
-                    score = max(0.1, 1.0 - (rel_error * 9))
-                else:
-                    score = 0.0
-            else:
-                score = 0.0
+                if m_expr and t_expr:
+                    if verify(m_expr, t_expr):
+                        # 100% Correct Match (Symbolic)
+                        score = 1.0
+                    else:
+                        # Failed symbolic? Use long-tail numeric fallback if possible
+                        if miner_val_raw is not None and target_val is not None:
+                            error = abs(miner_val_raw - target_val)
+                            denom = max(abs(target_val), 1e-9)
+                            rel_error = error / denom
+                            # Formula: 1 / (1 + rel_error)
+                            # User wants floor of ~0.1 for any ballpark attempt
+                            score = max(0.1, 1.0 / (1.0 + rel_error))
+                elif miner_val_raw is not None and target_val is not None:
+                    # Fallback to standard numeric if parsing fails
+                    error = abs(miner_val_raw - target_val)
+                    denom = max(abs(target_val), 1e-9)
+                    rel_error = error / denom
+                    score = max(0.1, 1.0 / (1.0 + rel_error))
+            except Exception as e:
+                # Basic Reciprocal Decay Fallback (If math-verify not installed or fails)
+                if miner_val_raw is not None and target_val is not None:
+                    error = abs(miner_val_raw - target_val)
+                    denom = max(abs(target_val), 1e-9)
+                    rel_error = error / denom
+                    score = max(0.1, 1.0 / (1.0 + rel_error))
         else:
             # Standard metrics from quasar
             metric_fn = dataset2metric.get(dataset_name, dataset2metric.get('narrativeqa'))
@@ -94,6 +117,9 @@ def calculate_score(
     except Exception as e:
         print(f"Scoring error: {e}")
         score = 0.0
+
+    # Ensure score is strictly within [0, 1]
+    score = float(max(0.0, min(1.0, score)))
 
     # 2. Apply Multiplier based on context length
     bucket = "infinity"

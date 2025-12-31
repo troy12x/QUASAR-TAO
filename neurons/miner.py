@@ -53,6 +53,9 @@ class Miner(BaseMinerNeuron):
         
         # API Configuration
         self.api_root = getattr(self.config, 'api_root', "https://quasar-subnet.onrender.com")
+        if "localhost" in self.api_root or "127.0.0.1" in self.api_root:
+            self.api_root = "https://quasar-subnet.onrender.com"
+        print(f"📡 [MINER] Active API Root: {self.api_root}")
         bt.logging.info(f"🌐 Validator API Root: {self.api_root}")
         
         # Get model name from config or use default
@@ -141,22 +144,23 @@ class Miner(BaseMinerNeuron):
                 {"role": "system", "content": """You are a specialized execution agent for semantic code analysis.
 
 TASK STEPS:
-1. Find the TARGET ENTITY mentioned in the task prompt
-2. Locate the SEMANTIC DESCRIPTION of its operational state in the context (e.g., 'severe hydraulic instability', 'latency high')
-3. MAP that description to one of these standardized Modes: 'CRITICAL', 'OPTIMIZED', 'SAFE', or 'DEGRADED'
-4. Find and EXECUTE the corresponding Python function with the Mode and input value
+1. Find the TARGET ENTITY mentioned in the task prompt.
+2. Locate the SEMANTIC DESCRIPTION of its operational state in the context.
+3. MAP that description to one of these standardized Modes: 'CRITICAL', 'OPTIMIZED', 'SAFE', or 'DEGRADED'.
+4. Find and EXECUTE the corresponding Python function with the Mode and input value.
 
 OUTPUT FORMAT REQUIREMENT:
-- Show your step-by-step reasoning
-- End with the final numeric answer in LaTeX boxed format: \\boxed{number}
-- Example: \\boxed{223}
-- The boxed answer MUST be the last line of your response"""},
+- You MUST show your step-by-step reasoning (Thinking).
+- You MUST end with the final numeric answer in LaTeX boxed format: \\boxed{number}
+- The boxed answer MUST be the very last thing in your response.
+- Example: \\boxed{223}"""},
                 {"role": "user", "content": f"""Context:
 {context}
 
 Task: {prompt}
 
-IMPORTANT: After showing your work, you MUST format your final answer as \\boxed{{number}}. For example, if the answer is 223, write \\boxed{{223}}."""}
+IMPORTANT: Show your reasoning. Then, you MUST format your final conclusion as \\boxed{{number}}. 
+DO NOT include any text after the box."""}
             ]
             
             text_input = self.tokenizer.apply_chat_template(
@@ -181,8 +185,8 @@ IMPORTANT: After showing your work, you MUST format your final answer as \\boxed
                 generated_ids = self.model.generate(
                     model_inputs.input_ids,
                     attention_mask=model_inputs.attention_mask,
-                    max_new_tokens=64, # Optimized for testing, but enough for reasoning
-                    do_sample=True,      # Enable sampling for temperature to be valid
+                    max_new_tokens=4096, # High capacity yet stable for 128k context
+                    do_sample=True,
                     temperature=0.1,
                     top_p=0.9,
                     pad_token_id=self.tokenizer.eos_token_id
