@@ -397,14 +397,23 @@ class Validator(BaseValidatorNeuron):
             
             try:
                 if task.dataset_name in ["quasar_execution_v1", "quasar_execution_v3"]:
-                    # Execution Scoring: Exact numeric match (with small tolerance)
+                    # Execution Scoring: Continuous numeric match (with linear decay)
                     try:
                         miner_val, method = self._extract_answer(response.response)
                         target_val = float(task.expected_output)
                         
-                        # Tolerance of 0.1% or 0.01 absolute
-                        if miner_val is not None and math.isclose(miner_val, target_val, rel_tol=1e-3, abs_tol=0.01):
-                            score = 1.0
+                        if miner_val is not None:
+                            error = abs(miner_val - target_val)
+                            denom = max(abs(target_val), 1e-9)
+                            rel_error = error / denom
+                            
+                            if rel_error < 0.001: # 0.1% tolerance for full credit
+                                score = 1.0
+                            elif rel_error < 0.1: # Up to 10% error for partial credit
+                                # Linear decay from 1.0 down to 0.1
+                                score = max(0.1, 1.0 - (rel_error * 9))
+                            else:
+                                score = 0.0
                         else:
                             score = 0.0
                     except:

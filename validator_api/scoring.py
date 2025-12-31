@@ -69,8 +69,19 @@ def calculate_score(
             miner_val, _ = extract_answer(response_text)
             target_val = float(expected_output)
             
-            if miner_val is not None and math.isclose(miner_val, target_val, rel_tol=1e-3, abs_tol=0.01):
-                score = 1.0
+            if miner_val is not None:
+                error = abs(miner_val - target_val)
+                denom = max(abs(target_val), 1e-9)
+                rel_error = error / denom
+                
+                if rel_error < 0.001: # 0.1% tolerance for full credit
+                    score = 1.0
+                elif rel_error < 0.1: # Up to 10% error for partial credit
+                    # Linear decay from 1.0 down to 0.1
+                    # At rel_error=0.1, score is ~0.1
+                    score = max(0.1, 1.0 - (rel_error * 9))
+                else:
+                    score = 0.0
             else:
                 score = 0.0
         else:
