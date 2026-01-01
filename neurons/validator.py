@@ -311,20 +311,33 @@ class Validator(BaseValidatorNeuron):
                 # Log individual metrics for transparency
                 if rewards:
                     total_reward = sum(rewards)
+                    avg_reward = total_reward / len(rewards)
                     avg_accuracy = sum(self.last_raw_accuracies) / len(self.last_raw_accuracies) if hasattr(self, 'last_raw_accuracies') and self.last_raw_accuracies else 0
                     
                     # Log Summary Table
                     print("\n" + "="*80)
                     print(f"📊 STEP {self.step} SUMMARY | Project: {WANDB_PROJECT}")
                     print("="*80)
+                    
+                    # Validator Info
+                    v_incentive = self.metagraph.I[self.uid].item() if hasattr(self.metagraph, 'I') else 0.0
+                    v_emission = self.metagraph.E[self.uid].item() if hasattr(self.metagraph, 'E') else 0.0
+                    v_vtrust = self.metagraph.V[self.uid].item() if hasattr(self.metagraph, 'V') else 0.0
+                    v_stake = self.metagraph.S[self.uid].item() if hasattr(self.metagraph, 'S') else 0.0
+                    
+                    print(f"👤 VALIDATOR: UID {self.uid} | Stake: {v_stake:.2f} τ | VTrust: {v_vtrust:.4f} | Incentive: {v_incentive:.4f} | Emission: {v_emission:.4f} τ")
+                    print("-" * 80)
                     print(f"{'UID':<5} | {'Reward':<10} | {'Accuracy':<10} | {'Method':<15} | {'Time(s)':<8} | {'Status'}")
                     print("-" * 80)
                     for i, uid in enumerate(miner_uids):
-                        acc = self.last_raw_accuracies[i] if i < len(self.last_raw_accuracies) else 0.0
-                        method = self.last_scoring_methods[i] if hasattr(self, 'last_scoring_methods') and i < len(self.last_scoring_methods) else "unknown"
-                        ptime = getattr(responses[i], 'processing_time', 0.0)
+                        # Force all values to be safe for formatting (avoid NoneType errors)
+                        r_val = float(rewards[i]) if rewards[i] is not None else 0.0
+                        acc_val = float(self.last_raw_accuracies[i]) if i < len(self.last_raw_accuracies) and self.last_raw_accuracies[i] is not None else 0.0
+                        method = self.last_scoring_methods[i] if hasattr(self, 'last_scoring_methods') and i < len(self.last_scoring_methods) and self.last_scoring_methods[i] is not None else "unknown"
+                        ptime = float(getattr(responses[i], 'processing_time', 0.0) or 0.0)
                         status = getattr(responses[i].dendrite, 'status_message', 'N/A')
-                        print(f"{uid:<5} | {rewards[i]:<10.4f} | {acc:<10.3f} | {method:<15} | {ptime:<8.2f} | {status}")
+                        
+                        print(f"{uid:<5} | {r_val:<10.4f} | {acc_val:<10.3f} | {method:<15} | {ptime:<8.2f} | {status}")
                     
                     sys_m = get_system_metrics()
                     print("-" * 80)
@@ -638,6 +651,14 @@ class Validator(BaseValidatorNeuron):
         
         # Add System Metrics
         metrics.update(get_system_metrics())
+        
+        # Add Validator Stats
+        metrics.update({
+            "validator/stake": self.metagraph.S[self.uid].item() if hasattr(self.metagraph, 'S') else 0.0,
+            "validator/vtrust": self.metagraph.V[self.uid].item() if hasattr(self.metagraph, 'V') else 0.0,
+            "validator/incentive": self.metagraph.I[self.uid].item() if hasattr(self.metagraph, 'I') else 0.0,
+            "validator/emission": self.metagraph.E[self.uid].item() if hasattr(self.metagraph, 'E') else 0.0,
+        })
         
         # Per-Bucket Metrics
         metrics[f"rewards/{bucket_name}"] = avg_reward
