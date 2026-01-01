@@ -24,6 +24,7 @@ import asyncio
 import argparse
 import threading
 import bittensor as bt
+import torch
 
 from typing import List, Union
 from traceback import print_exception
