@@ -114,22 +114,24 @@ class Miner(BaseMinerNeuron):
         
         try:
             # 1. Check if we need to fetch context from API (Light Synapse)
-            context = getattr(synapse, 'context', '')
-            prompt = getattr(synapse, 'prompt', '')
+            context = getattr(synapse, 'context', '') or ''
+            prompt = getattr(synapse, 'prompt', '') or ''
             
             if not context or not prompt:
                 print(f"📡 [MINER] Light Synapse detected for task {synapse.task_id}. Fetching details from API...")
                 bt.logging.info(f"📡 Fetching task details for {synapse.task_id} from API...")
                 api_details = self._call_api(f"get_task_details/{synapse.task_id}")
                 if api_details:
-                    context = api_details.get('context', '')
-                    prompt = api_details.get('prompt', '')
+                    context = api_details.get('context', '') or ''
+                    prompt = api_details.get('prompt', '') or ''
                     print(f"✅ [MINER] Context successfully retrieved ({len(context)} chars) from API.")
                     bt.logging.info(f"✅ Fetched task details from API.")
                 else:
                     print(f"❌ [MINER] Failed to fetch task details from API!")
                     bt.logging.error(f"❌ Failed to fetch task details for {synapse.task_id}")
-                    # We continue, but it will likely fail generation or be empty
+                    # If we can't get task details for a light synapse, we must abort
+                    if not context or not prompt:
+                        raise ValueError(f"Task details missing for {synapse.task_id} and API fetch failed.")
             
             print(f"\n[MINER] 📝 Received Task: {synapse.task_id}")
             print(f"[MINER] Prompt: {prompt}")
@@ -267,6 +269,9 @@ DO NOT include any text after the box."""}
                 response = requests.get(url, headers=headers, timeout=120)
             else:
                 response = requests.post(url, headers=headers, json=data, timeout=120)
+            
+            if response.status_code != 200:
+                bt.logging.error(f"❌ API Error {response.status_code}: {response.text}")
             
             response.raise_for_status()
             return response.json()
