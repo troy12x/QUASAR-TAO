@@ -45,7 +45,7 @@ class Miner(BaseMinerNeuron):
         super(Miner, self).__init__(config=config)
         
         bt.logging.info("Initializing Long Context Miner...")
-        print(f"\n🔑 [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
+        print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
         
         # Initialize device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -55,23 +55,35 @@ class Miner(BaseMinerNeuron):
         self.api_root = getattr(self.config, 'api_root', "https://quasar-subnet.onrender.com")
         if "localhost" in self.api_root or "127.0.0.1" in self.api_root:
             self.api_root = "https://quasar-subnet.onrender.com"
-        print(f"📡 [MINER] Active API Root: {self.api_root}")
-        bt.logging.info(f"🌐 Validator API Root: {self.api_root}")
+        print(f" [MINER] Active API Root: {self.api_root}")
+        bt.logging.info(f" Validator API Root: {self.api_root}")
         
         # Get model name from config or use default
         self.model_name = getattr(self.config.miner, 'model_name', "silx-ai/Quasar-2M-Base")
         
+        # Get league from config or use default (500k)
+        self.league = getattr(self.config.miner, 'league', "500k")
+
+        # Validate league selection
+        valid_leagues = ["100k", "200k", "300k", "400k", "500k", "600k", "700k", "800k", "900k", "1M"]
+        if self.league not in valid_leagues:
+            bt.logging.warning(f"Invalid league {self.league}. Defaulting to 500k.")
+            self.league = "500k"
+
         # Validate model selection
         if self.model_name not in self.SUPPORTED_MODELS:
             bt.logging.warning(f"Model {self.model_name} not in supported list. Proceeding anyway...")
             bt.logging.info(f"Supported models: {', '.join(self.SUPPORTED_MODELS)}")
         
+        # Register miner with API
+        self._register_with_api()
+
         try:
-            print(f"🔄 Loading tokenizer for {self.model_name}...")
+            print(f" Loading tokenizer for {self.model_name}...")
             bt.logging.info(f"Loading model: {self.model_name}...")
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
             
-            print(f"🔄 Loading model weights for {self.model_name}... (this can take several minutes)")
+            print(f" Loading model weights for {self.model_name}... (this can take several minutes)")
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name, 
                 trust_remote_code=True, 
@@ -87,17 +99,49 @@ class Miner(BaseMinerNeuron):
             
             # Log device map for debugging
             if hasattr(self.model, 'hf_device_map'):
-                print(f"🗺️ Model Device Map: {self.model.hf_device_map}")
+                print(f" Model Device Map: {self.model.hf_device_map}")
             else:
-                print(f"🗺️ Model Device: {self.model.device}")
+                print(f" Model Device: {self.model.device}")
                 
             self.model.eval()
-            print(f"\n🔑 [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
+            print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
         except Exception as e:
             bt.logging.error(f"Failed to load model {self.model_name}: {e}")
             bt.logging.warning("Please ensure you have access/internet or specify a valid model.")
             raise e
+
+    def _register_with_api(self):
+        """Register miner with the Validator API for a specific model and league."""
+        try:
+            import requests
+            url = f"{self.api_root}/register_miner"
+            headers = {
+                "Hotkey": self.wallet.hotkey.ss58_address,
+                "Signature": self._get_signature()
+            }
+            data = {
+                "hotkey": self.wallet.hotkey.ss58_address,
+                "model_name": self.model_name,
+                "league": self.league
+            }
+
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+
+            print(f" [MINER] Registered with API: {result['status']}")
+            bt.logging.info(f" Registered for {self.model_name} in {self.league} league")
+
+            # Check league info
+            league_info_url = f"{self.api_root}/get_league_info/{self.league}/{self.model_name}"
+            league_response = requests.get(league_info_url, headers=headers, timeout=30)
+            if league_response.status_code == 200:
+                info = league_response.json()
+                print(f" [MINER] League {self.league} ({self.model_name}): Top Score={info['top_score']:.4f}, Active Miners={info['active_miners']}")
+        except Exception as e:
+            bt.logging.warning(f" Failed to register with API: {e}")
+            print(f" [MINER] API registration failed, continuing anyway...")
 
     async def forward(
         self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
@@ -288,14 +332,30 @@ DO NOT include any text after the box."""}
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 mem = torch.cuda.memory_reserved(i) / (1024 * 1024)
-                bt.logging.info(f"💾 [MEMORY] {stage} | GPU {i}: {mem:.2f} MB")
+                bt.logging.info(f" [MEMORY] {stage} | GPU {i}: {mem:.2f} MB")
 
 # This is the main function, which runs the miner.
 if __name__ == "__main__":
     import argparse
     
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mock", action="store_true", help="Run in mock mode for testing")
+    args, unknown = parser.parse_known_args()
+
+    if args.mock:
+        print(" [MOCK MODE] Running miner in mock mode...")
+        bt.logging.info(" MOCK MODE: Using mock components for testing")
+
+        # Import mock components
+        from quasar.mock import MockSubtensor, MockMetagraph, MockDendrite
+
+        # Override Bittensor components
+        bt.subtensor = MockSubtensor
+        bt.Metagraph = MockMetagraph
+        bt.Dendrite = MockDendrite
+
     # Note: Bittensor's config system will automatically parse --miner.model_name
-    # from command line arguments
+    # and --miner.league from command line arguments
     with Miner() as miner:
         while True:
             bt.logging.info("Miner running...", time.time())

@@ -38,24 +38,28 @@ PENALTY_NO_RESPONSE = 0.0
 PENALTY_FAKE = -0.5 # Serious penalty for fake data if detected
 TIMEOUT_PENALTY = 0.0
 
-# Context Buckets (for nuanced scoring)
-# Context Buckets (Granular & Scaled)
-BUCKETS = {
-    '32k': (0, 32_000),      # < 32k
-    '128k': (32_000, 128_000),
-    '500k': (128_000, 500_000),
-    '1M': (500_000, 1_000_000),
-    '2M': (1_000_000, 2_000_000),
+# League Configuration (100k to 1M in 100k increments)
+LEAGUES = ["100k", "200k", "300k", "400k", "500k", "600k", "700k", "800k", "900k", "1M"]
+LEAGUE_MULTIPLIERS = {
+    "100k": 0.5,
+    "200k": 0.75,
+    "300k": 1.0,
+    "400k": 1.25,
+    "500k": 1.5,
+    "600k": 1.75,
+    "700k": 2.0,
+    "800k": 2.25,
+    "900k": 2.5,
+    "1M": 3.0
 }
 
-# Non-linear Reward Multipliers
-REWARD_MULTIPLIERS = {
-    '32k': 0.1,    # Heavy penalty for short context (User requested ~0.1 for <100k)
-    '128k': 0.1,   # Still penalize < 128k heavily
-    '500k': 1.0,   # Baseline for "Long Context"
-    '1M': 1.5,     # Reward scaling
-    '2M': 2.0      # Maximum reward
-}
+def get_league(context_length: int) -> str:
+    """Determine league based on context length."""
+    for i, league in enumerate(LEAGUES):
+        max_tokens = (i + 1) * 100_000
+        if context_length <= max_tokens:
+            return league
+    return "1M"  # Fallback to highest league
 
 class Validator(BaseValidatorNeuron):
     """
@@ -87,8 +91,8 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info(f"🌐 Validator API Root: {self.api_root}")
         
         # Now properly initialize bucket_scores with correct size
-        self.bucket_scores = {b: torch.zeros(self.metagraph.n) for b in BUCKETS}
-        self.bucket_cumulative_rewards = {b: 0.0 for b in BUCKETS}
+        self.bucket_scores = {b: torch.zeros(self.metagraph.n) for b in LEAGUES}
+        self.bucket_cumulative_rewards = {b: 0.0 for b in LEAGUES}
         
         # 2. State Management
         self.load_state()
@@ -158,16 +162,16 @@ class Validator(BaseValidatorNeuron):
         """Load validator state from disk."""
         try:
             self.difficulty_level = "medium"
-            self.bucket_scores = {k: torch.zeros(self.metagraph.n, device=self.device) for k in BUCKETS.keys()}
+            self.bucket_scores = {k: torch.zeros(self.metagraph.n, device=self.device) for k in LEAGUES}
             self.scores = torch.zeros(self.metagraph.n, dtype=torch.float32, device=self.device)
             self.consecutive_failures = torch.zeros(self.metagraph.n, dtype=torch.float32, device=self.device)
             self.moving_avg_decay = 0.9
-            
+
             state_path = self.config.neuron.full_path + "/state.pt"
             if os.path.exists(state_path):
                 state = torch.load(state_path, weights_only=False)
                 self.step = state.get("step", 0)
-                
+
                 # Handle potential numpy vs torch conflict for scores
                 loaded_scores = state.get("scores", self.scores)
                 if isinstance(loaded_scores, np.ndarray):
@@ -182,7 +186,7 @@ class Validator(BaseValidatorNeuron):
                 for k, v in loaded_bucket_rewards.items():
                     if k in self.bucket_cumulative_rewards:
                         self.bucket_cumulative_rewards[k] = v
-                    
+
                 self.difficulty_level = state.get("difficulty_level", "medium")
                 loaded_buckets = state.get("bucket_scores", {})
                 for k, v in loaded_buckets.items():
@@ -191,7 +195,7 @@ class Validator(BaseValidatorNeuron):
                             self.bucket_scores[k] = torch.from_numpy(v).float().to(self.device)
                         else:
                             self.bucket_scores[k] = v.to(self.device)
-                
+
                 bt.logging.success("💾 State loaded successfully.")
         except Exception as e:
             bt.logging.warning(f"⚠️ Failed to load state (starting fresh): {e}")

@@ -40,7 +40,10 @@ class MinerScore(Base):
     __tablename__ = "miner_scores"
 
     hotkey = Column(String, primary_key=True, index=True)
+    model_name = Column(String, index=True)  # e.g., "Qwen-2.5-0.5B", "Kimi-48B"
+    league = Column(String, index=True)  # e.g., "100k", "200k", ..., "1M"
     score = Column(Float, default=0.0)
+    tasks_completed = Column(Integer, default=0)  # Track tasks per league
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # Pydantic Schemas
@@ -77,8 +80,23 @@ class ResultCreate(ResultBase):
 
 class MinerScoreResponse(BaseModel):
     hotkey: str
+    model_name: str
+    league: str
     score: float
+    tasks_completed: int
     last_updated: datetime
 
     class Config:
         from_attributes = True
+
+class RegisterMinerRequest(BaseModel):
+    hotkey: str
+    model_name: str
+    league: str  # "100k", "200k", ..., "1M"
+
+class LeagueInfoResponse(BaseModel):
+    league: str
+    model_name: str
+    top_score: float
+    top_hotkey: Optional[str]
+    active_miners: int

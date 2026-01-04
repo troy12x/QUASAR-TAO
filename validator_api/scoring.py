@@ -90,35 +90,18 @@ def calculate_score(
                         if miner_val_raw is not None and target_val is not None:
                             error = abs(miner_val_raw - target_val)
                             denom = max(abs(target_val), 1e-9)
-                            rel_error = error / denom
-                            score = max(0.1, 1.0 / (1.0 + rel_error))
-                            method = "numeric(rel_error)"
-                elif miner_val_raw is not None and target_val is not None:
-                    # Fallback to standard numeric if parsing fails
-                    error = abs(miner_val_raw - target_val)
-                    denom = max(abs(target_val), 1e-9)
-                    rel_error = error / denom
-                    score = max(0.1, 1.0 / (1.0 + rel_error))
-                    method = "numeric(rel_error)"
-            except Exception as e:
-                # Basic Reciprocal Decay Fallback (If math-verify not installed or fails)
-                if miner_val_raw is not None and target_val is not None:
-                    error = abs(miner_val_raw - target_val)
-                    denom = max(abs(target_val), 1e-9)
-                    rel_error = error / denom
-                    score = max(0.1, 1.0 / (1.0 + rel_error))
-                    method = "numeric(rel_error)"
         else:
             # Standard metrics from quasar
-            method = dataset_name
             metric_fn = dataset2metric.get(dataset_name, dataset2metric.get('narrativeqa'))
             if all_classes:
                 score = metric_fn(response_text, expected_output, all_classes=all_classes)
             else:
                 score = metric_fn(response_text, expected_output)
+            method = "metric"
     except Exception as e:
         print(f"Scoring error: {e}")
         score = 0.0
+        method = "error"
 
     # Ensure score is strictly within [0, 1]
     score = float(max(0.0, min(1.0, score)))
