@@ -90,6 +90,34 @@ def calculate_score(
                         if miner_val_raw is not None and target_val is not None:
                             error = abs(miner_val_raw - target_val)
                             denom = max(abs(target_val), 1e-9)
+                            relative_error = error / denom
+                            score = max(0.0, 1.0 - relative_error)
+                            method = "numeric_fallback"
+                        else:
+                            score = 0.0
+                            method = "symbolic_failed"
+                else:
+                    # Could not parse expressions, use numeric fallback
+                    if miner_val_raw is not None and target_val is not None:
+                        error = abs(miner_val_raw - target_val)
+                        denom = max(abs(target_val), 1e-9)
+                        relative_error = error / denom
+                        score = max(0.0, 1.0 - relative_error)
+                        method = "numeric"
+                    else:
+                        score = 0.0
+                        method = "parse_failed"
+            except ImportError:
+                # math-verify not available, use numeric fallback
+                if miner_val_raw is not None and target_val is not None:
+                    error = abs(miner_val_raw - target_val)
+                    denom = max(abs(target_val), 1e-9)
+                    relative_error = error / denom
+                    score = max(0.0, 1.0 - relative_error)
+                    method = "numeric"
+                else:
+                    score = 0.0
+                    method = "no_math_verify"
         else:
             # Standard metrics from quasar
             metric_fn = dataset2metric.get(dataset_name, dataset2metric.get('narrativeqa'))
