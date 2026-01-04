@@ -75,9 +75,17 @@ class Miner(BaseMinerNeuron):
             bt.logging.warning(f"Model {self.model_name} not in supported list. Proceeding anyway...")
             bt.logging.info(f"Supported models: {', '.join(self.SUPPORTED_MODELS)}")
         
-        # Register miner with API
-        self._register_with_api()
+        # Model will be loaded in load_model() method (after axon starts)
+        self.model = None
+        self.tokenizer = None
+        self.max_length = None
+        self.model_loaded = False
 
+    def load_model(self):
+        """Load the model and tokenizer. Call this after starting the axon."""
+        if self.model_loaded:
+            return
+        
         try:
             print(f" Loading tokenizer for {self.model_name}...")
             bt.logging.info(f"Loading model: {self.model_name}...")
@@ -106,6 +114,7 @@ class Miner(BaseMinerNeuron):
             self.model.eval()
             print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
+            self.model_loaded = True
         except Exception as e:
             bt.logging.error(f"Failed to load model {self.model_name}: {e}")
             bt.logging.warning("Please ensure you have access/internet or specify a valid model.")
@@ -153,6 +162,18 @@ class Miner(BaseMinerNeuron):
         # Note: The protocol class name needs to be confirmed. 
         # Assuming `InfiniteContextSynapse` or similar from previous code validation.
         # Existing miner used `quasar.protocol.InfiniteContextSynapse`.
+        
+        # Wait for model to be loaded
+        max_wait = 300  # 5 minutes max wait
+        waited = 0
+        while not self.model_loaded and waited < max_wait:
+            time.sleep(1)
+            waited += 1
+        
+        if not self.model_loaded:
+            synapse.response = "Error: Model not loaded yet. Please try again."
+            synapse.processing_time = 0.0
+            return synapse
         
         start_time = time.time()
         
@@ -337,8 +358,30 @@ DO NOT include any text after the box."""}
 # This is the main function, which runs the miner.
 if __name__ == "__main__":
     import argparse
+    import threading
 
     # Note: Bittensor's config system will automatically parse --miner.model_name
     # and --miner.league from command line arguments
     with Miner() as miner:
-        miner.run()
+        # Start the miner's axon in a separate thread
+        def run_miner():
+            miner.run()
+        
+        miner_thread = threading.Thread(target=run_miner, daemon=False)
+        miner_thread.start()
+        
+        # Wait for axon to start serving
+        time.sleep(3)
+        
+        # Load model in background while axon is serving
+        print(" [MINER] Loading model in background (axon is serving)...")
+        miner.load_model()
+        
+        # Keep miner running indefinitely
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n [MINER] Shutting down...")
+            miner.should_exit = True
+            miner_thread.join(timeout=5)
