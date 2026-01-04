@@ -337,26 +337,8 @@ DO NOT include any text after the box."""}
 # This is the main function, which runs the miner.
 if __name__ == "__main__":
     import argparse
-    
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mock", action="store_true", help="Run in mock mode for testing")
-    args, unknown = parser.parse_known_args()
-
-    if args.mock:
-        print(" [MOCK MODE] Running miner in mock mode...")
-        bt.logging.info(" MOCK MODE: Using mock components for testing")
-
-        # Import mock components
-        from quasar.mock import MockSubtensor, MockMetagraph, MockDendrite
-
-        # Override Bittensor components
-        bt.subtensor = MockSubtensor
-        bt.Metagraph = MockMetagraph
-        bt.Dendrite = MockDendrite
 
     # Note: Bittensor's config system will automatically parse --miner.model_name
     # and --miner.league from command line arguments
     with Miner() as miner:
-        while True:
-            bt.logging.info("Miner running...", time.time())
-            time.sleep(5)
+        miner.run()
