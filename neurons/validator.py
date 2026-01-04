@@ -75,6 +75,11 @@ class Validator(BaseValidatorNeuron):
         self.cumulative_accuracy = 0.0
         self.bucket_cumulative_rewards = {} # Empty until buckets exist
         
+        # Task progress tracking
+        self.tasks_completed = 0
+        self.total_tasks = 0
+        self.current_benchmark = None
+        
         super(Validator, self).__init__(config=config)
         bt.logging.info("🚀 Initializing Professional Long Context Validator...")
         
@@ -261,7 +266,29 @@ class Validator(BaseValidatorNeuron):
 
                 # 2. Context Bucket logic
                 bucket_name = self.get_bucket(task.context_length)
+                
+                # Track benchmark progress
+                dataset_name = getattr(task, 'dataset_name', 'unknown')
+                if self.current_benchmark != dataset_name:
+                    self.current_benchmark = dataset_name
+                    self.tasks_completed = 0
+                    # Get total tasks for this benchmark
+                    try:
+                        if hasattr(self.benchmark_loader, 'benchmarks') and dataset_name in self.benchmark_loader.benchmarks:
+                            self.total_tasks = len(self.benchmark_loader.benchmarks[dataset_name])
+                        else:
+                            self.total_tasks = 100  # Default estimate
+                    except:
+                        self.total_tasks = 100
+                
+                self.tasks_completed += 1
+                
+                # Calculate progress percentage
+                progress_pct = (self.tasks_completed / self.total_tasks * 100) if self.total_tasks > 0 else 0
+                progress_bar = "█" * int(progress_pct / 5) + "░" * (20 - int(progress_pct / 5))
+                
                 bt.logging.success(f"📋 Task Loaded: {task.task_id} [{bucket_name}] | Length: {task.context_length}")
+                print(f"📈 Progress: [{progress_bar}] {self.tasks_completed}/{self.total_tasks} ({progress_pct:.1f}%) - {dataset_name}")
 
                 # 3. Query
                 miner_uids = self.get_random_miners(self.config.neuron.sample_size)
