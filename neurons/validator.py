@@ -324,10 +324,10 @@ class Validator(BaseValidatorNeuron):
                     print("="*80)
                     
                     # Validator Info
-                    v_incentive = self.metagraph.I[self.uid].item() if hasattr(self.metagraph, 'I') else 0.0
-                    v_emission = self.metagraph.E[self.uid].item() if hasattr(self.metagraph, 'E') else 0.0
-                    v_vtrust = self.metagraph.V[self.uid].item() if hasattr(self.metagraph, 'V') else 0.0
-                    v_stake = self.metagraph.S[self.uid].item() if hasattr(self.metagraph, 'S') else 0.0
+                    v_incentive = float(self.metagraph.I[self.uid]) if hasattr(self.metagraph, 'I') else 0.0
+                    v_emission = float(self.metagraph.E[self.uid]) if hasattr(self.metagraph, 'E') else 0.0
+                    v_vtrust = float(self.metagraph.V[self.uid]) if hasattr(self.metagraph, 'V') else 0.0
+                    v_stake = float(self.metagraph.S[self.uid]) if hasattr(self.metagraph, 'S') else 0.0
                     
                     print(f"👤 VALIDATOR: UID {self.uid} | Stake: {v_stake:.2f} τ | VTrust: {v_vtrust:.4f} | Incentive: {v_incentive:.4f} | Emission: {v_emission:.4f} τ")
                     print("-" * 80)
@@ -430,10 +430,8 @@ class Validator(BaseValidatorNeuron):
         return task
 
     def get_bucket(self, length: int) -> str:
-        for name, (low, high) in BUCKETS.items():
-            if low <= length < high:
-                return name
-        return "2M" # Fallback to the largest defined bucket
+        """Determine league based on context length."""
+        return get_league(length)
 
     def get_random_miners(self, k: int):
         uids = [uid for uid in range(self.metagraph.n) if self.metagraph.axons[uid].is_serving and uid != self.uid]
@@ -528,9 +526,9 @@ class Validator(BaseValidatorNeuron):
                 # Track raw accuracy
                 raw_accuracies.append(score)
                 
-                # Apply Non-Linear Multiplier based on context length
-                bucket = self.get_bucket(task.context_length)
-                multiplier = REWARD_MULTIPLIERS.get(bucket, 1.0)
+                # Apply League Multiplier based on context length
+                league = self.get_bucket(task.context_length)
+                multiplier = LEAGUE_MULTIPLIERS.get(league, 1.0)
                 final_score = score * multiplier
                 
                 raw_scores.append(final_score)
@@ -606,11 +604,11 @@ class Validator(BaseValidatorNeuron):
         # Update bucket specific score
         self.bucket_scores[bucket_name].scatter_(0, uids_tensor, r_tensor * 0.1 + self.bucket_scores[bucket_name][uids_tensor] * 0.9)
         
-        # Composite global score (weighted sum of buckets? or max? or avg?)
-        # Strategy: Sum of buckets allows specific miners to specialize or be generalists.
+        # Composite global score (weighted sum of leagues? or max? or avg?)
+        # Strategy: Sum of leagues allows specific miners to specialize or be generalists.
         # Simple Sum for now.
         composite = torch.zeros_like(self.scores)
-        for b_name in BUCKETS:
+        for b_name in LEAGUES:
             composite += self.bucket_scores[b_name]
             
         # Normalize
@@ -658,10 +656,10 @@ class Validator(BaseValidatorNeuron):
         
         # Add Validator Stats
         metrics.update({
-            "validator/stake": self.metagraph.S[self.uid].item() if hasattr(self.metagraph, 'S') else 0.0,
-            "validator/vtrust": self.metagraph.V[self.uid].item() if hasattr(self.metagraph, 'V') else 0.0,
-            "validator/incentive": self.metagraph.I[self.uid].item() if hasattr(self.metagraph, 'I') else 0.0,
-            "validator/emission": self.metagraph.E[self.uid].item() if hasattr(self.metagraph, 'E') else 0.0,
+            "validator/stake": float(self.metagraph.S[self.uid]) if hasattr(self.metagraph, 'S') else 0.0,
+            "validator/vtrust": float(self.metagraph.V[self.uid]) if hasattr(self.metagraph, 'V') else 0.0,
+            "validator/incentive": float(self.metagraph.I[self.uid]) if hasattr(self.metagraph, 'I') else 0.0,
+            "validator/emission": float(self.metagraph.E[self.uid]) if hasattr(self.metagraph, 'E') else 0.0,
         })
         
         # Per-Bucket Metrics
