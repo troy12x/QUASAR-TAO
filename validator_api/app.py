@@ -76,10 +76,11 @@ def get_league(context_length: int) -> str:
 def health_check():
     return {"status": "ok"}
 
-@app.get("/get_task", response_model=models.TaskResponse)
+@app.get("/get_task", response_model=models.MinerTaskResponse)
 def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
     """
     Generates a new production task using BenchmarkLoader.
+    Returns task WITHOUT expected_output for miners.
     """
     print(f"📥 [GET_TASK] Request from {hotkey[:8]}... (max_ctx: {max_context_length})")
     difficulty = random.choice(["easy", "medium", "hard", "extreme"])
@@ -93,7 +94,6 @@ def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get
     task = tasks[0]
     print(f"📤 [GET_TASK] Generated task: {task.task_id} (len: {task.context_length})")
     
-    # Store in DB
     # Store in DB
     db_task = models.Task(
         id=task.task_id,
@@ -110,24 +110,23 @@ def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get
     db.commit()
     db.refresh(db_task)
     
-    # Return with list formatted metrics
-    return models.TaskResponse(
+    # Return WITHOUT expected_output for miners
+    return models.MinerTaskResponse(
         id=db_task.id,
         dataset_name=db_task.dataset_name,
         task_type=db_task.task_type,
         context=db_task.context,
         prompt=db_task.prompt,
-        expected_output=db_task.expected_output,
         context_length=db_task.context_length,
         difficulty_level=db_task.difficulty_level,
         evaluation_metrics=db_task.evaluation_metrics.split(",") if db_task.evaluation_metrics else [],
         created_at=db_task.created_at
     )
 
-@app.get("/get_task_details/{task_id}", response_model=models.TaskResponse)
+@app.get("/get_task_details/{task_id}", response_model=models.MinerTaskResponse)
 def get_task_details(task_id: str, db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
     """
-    Returns the full details of a specific task.
+    Returns the details of a specific task WITHOUT expected_output.
     Used by miners to fetch heavy context data.
     """
     print(f"📥 [GET_TASK_DETAILS] Request for {task_id} from {hotkey[:8]}...")
@@ -136,13 +135,13 @@ def get_task_details(task_id: str, db: Session = Depends(get_db), hotkey: str = 
         print(f"❌ [GET_TASK_DETAILS] Task {task_id} not found!")
         raise HTTPException(status_code=404, detail="Task not found")
         
-    return models.TaskResponse(
+    # Return WITHOUT expected_output for miners
+    return models.MinerTaskResponse(
         id=db_task.id,
         dataset_name=db_task.dataset_name,
         task_type=db_task.task_type,
         context=db_task.context,
         prompt=db_task.prompt,
-        expected_output=db_task.expected_output,
         context_length=db_task.context_length,
         difficulty_level=db_task.difficulty_level,
         evaluation_metrics=db_task.evaluation_metrics.split(",") if db_task.evaluation_metrics else [],

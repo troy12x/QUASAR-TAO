@@ -67,6 +67,21 @@ class TaskResponse(TaskBase):
     class Config:
         from_attributes = True
 
+# Miner-specific task response WITHOUT expected output
+class MinerTaskResponse(BaseModel):
+    id: str
+    dataset_name: str
+    task_type: str
+    context: str
+    prompt: str
+    context_length: int
+    difficulty_level: str
+    evaluation_metrics: List[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class ResultBase(BaseModel):
     task_id: str
     miner_hotkey: str
