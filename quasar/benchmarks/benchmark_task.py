@@ -44,6 +44,9 @@ class BenchmarkTask:
     source: str = "longbench" # or "synthetic", "internal"
     created_at: float = field(default_factory=time.time)
     
+    # Additional metadata for task-specific info
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
     def __post_init__(self):
         """Initialize derived fields."""
         if self.context and not self.context_length:
@@ -76,7 +79,8 @@ class BenchmarkTask:
             difficulty_level=data.get('difficulty_level', 'medium'),
             evaluation_metrics=data.get('evaluation_metrics', []),
             all_classes=data.get('all_classes'),
-            source=data.get('source', 'unknown')
+            source=data.get('source', 'unknown'),
+            metadata=data.get('metadata', {})
         )
 
     def validate(self) -> bool:
