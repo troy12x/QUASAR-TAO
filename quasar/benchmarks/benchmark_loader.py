@@ -76,168 +76,199 @@ class BenchmarkLoader:
 
 class ContextualNeedleLoader:
     """
-    Generates 'Semantic Dependency' tasks (V4 - Hardened).
+    Generates 'Semantic Dependency' tasks (V5 - Long-Context Reasoning).
     
-    Upgrade V4 Features:
-    1. **Rotational Invariants**: Instead of just Odd/Even, we use `Result % Divisor == Remainder`.
-       - System generates a random Divisor (3-9) and Target Remainder.
-       - Target Function guarantees `(Result % D) == T`.
-       - Distractors guarantee `(Result % D) != T`.
-       
-    2. **Semantic Mode Mapping**: 
-       - Narrative does NOT use the keyword "CRITICAL".
-       - Narrative uses: "severe hydraulic instability", "core temperature critical", etc.
-       - Miner must map "instability" -> "CRITICAL" to run the code `if mode == 'CRITICAL':`.
-       
-    3. **Undecidable Distractors**:
-       - Distractors use the SAME variable names but different logic/modes which produce invalid invariants.
+    V5 Design: Forces genuine long-context semantic reasoning
+    
+    Key Changes from V4:
+    1. **No function logic visible** - Only signatures shown
+    2. **Configuration tables scattered** - Must find and lookup multiple tables
+    3. **Semantic parameter mapping** - Mode descriptions map to numeric parameters
+    4. **Brute-force impossible** - Too many parameter combinations (100+)
+    5. **Multi-step reasoning** - Requires 4+ information lookups
+    
+    Task Structure:
+    - Context contains:
+      * Function signatures (no implementation)
+      * System → Function mapping table
+      * Mode description → Parameter A table  
+      * Mode description → Parameter B table
+      * Noise logs
+      * Semantic clue about system state
+    
+    - To solve, must:
+      1. Find which function corresponds to system (table lookup)
+      2. Find system's state description (semantic clue)
+      3. Map state to Parameter A (table lookup)
+      4. Map state to Parameter B (table lookup)
+      5. Calculate: result = (x * param_A) + param_B
     """
     
     def __init__(self):
-        self.systems = ["Gorgon Drive", "Chimera Protocol", "Hydra Engine", "Pegasus Link", "Kraken Module"]
-        # Code Constants : [Semantic Descriptions]
-        self.mode_map = {
-            "CRITICAL": ["exceeds safe operating limits", "severe hydraulic instability", "imminent core failure", "structural integrity compromised"],
-            "OPTIMIZED": ["operating at peak efficiency", "nominal throughput achieved", "flow rate 100%", "optimal harmonic resonance"],
-            "SAFE": ["maintenance protocols active", "output restricted for safety", "idle state engaged", "manual override enabled"],
-            "DEGRADED": ["performance sub-optimal", "minor fractures detected", "buffer overflow warning", "latency high"]
+        self.systems = ["Gorgon Drive", "Chimera Protocol", "Hydra Engine", "Pegasus Link", "Kraken Module", "Titan Core", "Vortex Array", "Nexus Bridge"]
+        
+        # Semantic mode descriptions (10 per mode for variety)
+        self.mode_descriptions = {
+            "CRITICAL": [
+                "exceeds safe operating limits", "severe hydraulic instability", "imminent core failure",
+                "structural integrity compromised", "catastrophic pressure buildup", "thermal runaway detected",
+                "containment breach imminent", "critical resonance failure", "emergency shutdown required",
+                "system at failure threshold"
+            ],
+            "OPTIMIZED": [
+                "operating at peak efficiency", "nominal throughput achieved", "flow rate 100%",
+                "optimal harmonic resonance", "maximum performance mode", "efficiency at theoretical maximum",
+                "power output optimized", "thermal regulation perfect", "load balancing ideal",
+                "performance metrics nominal"
+            ],
+            "SAFE": [
+                "maintenance protocols active", "output restricted for safety", "idle state engaged",
+                "manual override enabled", "safety interlocks engaged", "reduced capacity mode",
+                "standby operation", "conservative power settings", "safety margin maintained",
+                "operation within safe parameters"
+            ],
+            "DEGRADED": [
+                "performance sub-optimal", "minor fractures detected", "buffer overflow warning",
+                "latency high", "efficiency reduced", "partial system failure",
+                "degraded performance mode", "subsystem malfunction", "throughput limited",
+                "operating with reduced capability"
+            ]
         }
         
-    def generate_task(self, n_distractors: int = 4, target_len: int = 32000) -> BenchmarkTask:
-        import math
+    def generate_task(self, n_distractors: int = 6, target_len: int = 32000) -> BenchmarkTask:
+        """
+        Generate a task requiring genuine long-context semantic reasoning.
+        """
         
-        # 1. Setup Narrative Truths
+        # 1. Setup task parameters
         system_name = random.choice(self.systems)
-        true_mode_key = random.choice(list(self.mode_map.keys()))
-        true_mode_desc = random.choice(self.mode_map[true_mode_key])
+        true_mode = random.choice(list(self.mode_descriptions.keys()))
+        true_mode_desc = random.choice(self.mode_descriptions[true_mode])
         
-        # 2. Setup Invariant (The Anti-Brute-Force Key)
-        # We pick a Divisor (3-9) and a Target Remainder
-        # The prompt will NOT explicitly state this invariant, but the VALID function will satisfy it.
-        # This prevents random guessing.
-        divisor = random.randint(3, 9)
-        target_remainder = random.randint(0, divisor - 1)
+        x_input = random.randint(10, 99)
         
-        # 3. Generate Target Function
-        # We need a function that, given 'x' and correct 'mode', returns `val` where `val % divisor == target_remainder`.
-        # Logic: return (x * mul + offset) * divisor + target_remainder
-        # This guarantees the modulo invariant.
+        # 2. Generate function signatures (no implementation - just signatures)
+        # Target function + distractors
+        all_functions = []
+        target_func_name = f"calc_{random.randint(100, 999)}"
+        all_functions.append(target_func_name)
         
-        x_input = random.choice(range(10, 100))
-        tgt_func_name = f"calc_{random.randint(100, 999)}_tgt"
-        
-        # To make it look natural, we do: `return x * large_mul + adjusted_bias`
-        # We solve for bias.
-        # desired = k * divisor + remainder
-        # We start with some random logic `x * mul`
-        # Then add bias to align modulo.
-        
-        mul_base = random.randint(2, 10)
-        
-        # Target Code Logic
-        # if mode == "CRITICAL": ...
-        # bias calculation:
-        # current_val = x * mul_base
-        # required_rem = target_remainder
-        # current_rem = current_val % divisor
-        # bias_needed = (required_rem - current_rem) % divisor
-        # To make bias look random, we add random multiples of divisor
-        
-        current_rem = (x_input * mul_base) % divisor
-        bias = (target_remainder - current_rem) % divisor
-        bias += random.randint(1, 5) * divisor # Add noise to bias
-        
-        target_code = f"""def {tgt_func_name}(x, mode):
-    # Logic for {system_name}
-    if mode == "{true_mode_key}":
-        return x * {mul_base} + {bias}
-    else:
-        return x * {mul_base} + {bias + 1}""" # +1 forces invariant violation
-        
-        target_result = x_input * mul_base + bias
-        
-        functions = [target_code]
-        
-        # 4. Generate Distractors
-        # Distractors must FAIL the invariant on the challenge input
         for _ in range(n_distractors):
-            d_name = f"calc_{random.randint(100, 999)}"
-            d_mul = random.randint(2, 10)
-            
-            # Ensure this calculation violates the target_remainder invariant
-            # (current + bias) % div != target_rem
-            d_bias = random.randint(1, 20)
-            if (x_input * d_mul + d_bias) % divisor == target_remainder:
-                d_bias += 1 # Force mismatch
-            
-            d_code = f"""def {d_name}(x, mode):
-    if mode == "SAFE":
-        return x * {d_mul} + {d_bias}
-    else:
-        return x * {d_mul} + {d_bias + 2}"""
-            functions.append(d_code)
-
-        # 5. Generate Narrative
-        # Use SEMANTIC DESCRIPTION, not the keyword
-        clue = f"Engineering report: The {system_name} is currently showing signs of {true_mode_desc}."
+            all_functions.append(f"calc_{random.randint(100, 999)}")
         
+        random.shuffle(all_functions)
+        
+        # 3. Generate parameter values for each mode description
+        # Create unique parameter mappings to prevent brute-force
+        param_a_map = {}  # mode_desc -> multiplier
+        param_b_map = {}  # mode_desc -> offset
+        
+        for mode, descs in self.mode_descriptions.items():
+            for desc in descs:
+                # Random parameters (2-20 range for multiplier, 1-50 for offset)
+                param_a_map[desc] = random.randint(2, 20)
+                param_b_map[desc] = random.randint(1, 50)
+        
+        # Calculate expected result
+        multiplier = param_a_map[true_mode_desc]
+        offset = param_b_map[true_mode_desc]
+        expected_result = (x_input * multiplier) + offset
+        
+        # 4. Build context parts
         context_parts = []
-        noise_pool = ["calibrating", "waiting for ack", "packet loss", "resyncing", "deploying hotifx"]
+        noise_pool = ["calibrating", "waiting for ack", "packet loss", "resyncing", "deploying hotifx", "handshake complete", "buffer flush", "checksum verified"]
         
-        # Add distractor system states
+        # Add function signatures (no logic visible!)
+        func_signatures = "\n".join([f"def {f}(x, multiplier, offset):" for f in all_functions])
+        context_parts.append(f"# System Calculation Functions\n{func_signatures}")
+        
+        # Add System → Function mapping table (scattered in context)
+        sys_func_map = {}
+        for func in all_functions:
+            # Assign random systems to functions
+            sys_func_map[random.choice(self.systems)] = func
+        
+        # Ensure target system is in the map
+        sys_func_map[system_name] = target_func_name
+        
+        # Format as table
+        map_table = "# System Function Mapping\n"
+        for sys_name, func_name in sys_func_map.items():
+            map_table += f"{sys_name} -> {func_name}\n"
+        context_parts.append(map_table)
+        
+        # Add Mode → Parameter A mapping table
+        param_a_table = "# Parameter A (Multiplier) Configuration\n"
+        for desc, val in param_a_map.items():
+            param_a_table += f'"{desc}" -> {val}\n'
+        context_parts.append(param_a_table)
+        
+        # Add Mode → Parameter B mapping table
+        param_b_table = "# Parameter B (Offset) Configuration\n"
+        for desc, val in param_b_map.items():
+            param_b_table += f'"{desc}" -> {val}\n'
+        context_parts.append(param_b_table)
+        
+        # Add distractor system states (wrong systems)
         for _ in range(n_distractors):
-            fake_sys = f"System-{random.randint(1,99)}"
-            fake_key = random.choice(list(self.mode_map.keys()))
-            fake_desc = random.choice(self.mode_map[fake_key])
-            context_parts.append(f"The {fake_sys} is {fake_desc}.")
-            
-        # Add target system state (CRITICAL - this must be present!)
+            fake_sys = random.choice([s for s in self.systems if s != system_name])
+            fake_mode = random.choice(list(self.mode_descriptions.keys()))
+            fake_desc = random.choice(self.mode_descriptions[fake_mode])
+            context_parts.append(f"Status report: {fake_sys} is {fake_desc}.")
+        
+        # Add target system state (THE KEY INFORMATION)
+        clue = f"Status report: {system_name} is {true_mode_desc}."
         context_parts.append(clue)
         
-        # Add function definitions
-        for f in functions:
-            context_parts.append(f)
-            
         # Add noise to reach target length
         while sum(len(c) for c in context_parts) < target_len:
-            context_parts.append(f"LOG: {random.choice(noise_pool)} - {random.randint(100,999)}")
-            
-        # Shuffle but ensure clue remains (it's now in context_parts)
+            context_parts.append(f"LOG: {random.choice(noise_pool)} - {random.randint(100, 999)}")
+        
+        # Shuffle context (but keep tables together for readability)
         random.shuffle(context_parts)
         full_context = "\n\n".join(context_parts)
         
-        # Verify clue is in final context
+        # Verify clue is present
         if clue not in full_context:
-            # Fallback: prepend clue if it got lost
             full_context = clue + "\n\n" + full_context
-            bt.logging.warning(f"Clue was lost during shuffle, prepended to context")
+            bt.logging.warning("Clue lost during shuffle, prepended")
         
-        # 6. Construct Prompt
-        # Hint about the invariant to guide the miner? 
-        # "Map the state description to a standard mode (CRITICAL, OPTIMIZED, SAFE, DEGRADED)."
-        prompt = f"Calculate the output for the {system_name} using input x={x_input}. You must identify the operational state of the {system_name} from the text and map it to a valid system Mode (CRITICAL, OPTIMIZED, SAFE, DEGRADED) to execute the function."
+        # 5. Construct prompt - forces multi-step reasoning
+        prompt = f"""Calculate the output for {system_name} with input x={x_input}.
+
+To solve this task, you must:
+1. Find the function assigned to {system_name} in the System Function Mapping table
+2. Find the current operational state of {system_name} in the status reports
+3. Look up the Parameter A (multiplier) for this state in the Parameter A Configuration table
+4. Look up the Parameter B (offset) for this state in the Parameter B Configuration table
+5. Execute the function with: result = (x * multiplier) + offset
+
+Provide only the numeric result."""
         
-        # Final verification - ensure task is solvable
-        bt.logging.info(f"Task generated: {system_name} | Mode: {true_mode_key} | Expected: {target_result}")
-        bt.logging.info(f"Clue present: {clue in full_context} | Functions: {len(functions)}")
+        # 6. Log task generation
+        bt.logging.info(f"Task V5: {system_name} | Mode: {true_mode} | x={x_input} | Expected: {expected_result}")
+        bt.logging.info(f"Clue: {clue}")
+        bt.logging.info(f"Function: {target_func_name} | Multiplier: {multiplier} | Offset: {offset}")
         
         return BenchmarkTask(
-            task_id=f"exec_v4_{random.randint(1000, 9999)}",
-            dataset_name="quasar_execution_v3", # Keep v3 dataset name for compat
+            task_id=f"exec_v5_{random.randint(1000, 9999)}",
+            dataset_name="quasar_execution_v5",
             task_type="execution",
             context=full_context,
             prompt=prompt,
-            expected_output=str(target_result),
+            expected_output=str(expected_result),
             context_length=len(full_context),
             difficulty_level="extreme",
             evaluation_metrics=["execution_match"],
-            source="contextual_needle_generator_v4",
+            source="contextual_needle_generator_v5",
             metadata={
                 "system_name": system_name,
-                "true_mode": true_mode_key,
+                "true_mode": true_mode,
                 "true_mode_desc": true_mode_desc,
-                "divisor": divisor,
-                "target_remainder": target_remainder,
+                "target_function": target_func_name,
+                "multiplier": multiplier,
+                "offset": offset,
+                "x_input": x_input,
                 "clue": clue
             }
         )
