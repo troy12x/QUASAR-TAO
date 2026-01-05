@@ -184,26 +184,42 @@ class ContextualNeedleLoader:
         context_parts = []
         noise_pool = ["calibrating", "waiting for ack", "packet loss", "resyncing", "deploying hotifx"]
         
+        # Add distractor system states
         for _ in range(n_distractors):
             fake_sys = f"System-{random.randint(1,99)}"
             fake_key = random.choice(list(self.mode_map.keys()))
             fake_desc = random.choice(self.mode_map[fake_key])
             context_parts.append(f"The {fake_sys} is {fake_desc}.")
             
+        # Add target system state (CRITICAL - this must be present!)
         context_parts.append(clue)
+        
+        # Add function definitions
         for f in functions:
             context_parts.append(f)
             
+        # Add noise to reach target length
         while sum(len(c) for c in context_parts) < target_len:
             context_parts.append(f"LOG: {random.choice(noise_pool)} - {random.randint(100,999)}")
             
+        # Shuffle but ensure clue remains (it's now in context_parts)
         random.shuffle(context_parts)
         full_context = "\n\n".join(context_parts)
+        
+        # Verify clue is in final context
+        if clue not in full_context:
+            # Fallback: prepend clue if it got lost
+            full_context = clue + "\n\n" + full_context
+            bt.logging.warning(f"Clue was lost during shuffle, prepended to context")
         
         # 6. Construct Prompt
         # Hint about the invariant to guide the miner? 
         # "Map the state description to a standard mode (CRITICAL, OPTIMIZED, SAFE, DEGRADED)."
         prompt = f"Calculate the output for the {system_name} using input x={x_input}. You must identify the operational state of the {system_name} from the text and map it to a valid system Mode (CRITICAL, OPTIMIZED, SAFE, DEGRADED) to execute the function."
+        
+        # Final verification - ensure task is solvable
+        bt.logging.info(f"Task generated: {system_name} | Mode: {true_mode_key} | Expected: {target_result}")
+        bt.logging.info(f"Clue present: {clue in full_context} | Functions: {len(functions)}")
         
         return BenchmarkTask(
             task_id=f"exec_v4_{random.randint(1000, 9999)}",
@@ -215,7 +231,15 @@ class ContextualNeedleLoader:
             context_length=len(full_context),
             difficulty_level="extreme",
             evaluation_metrics=["execution_match"],
-            source="contextual_needle_generator_v4"
+            source="contextual_needle_generator_v4",
+            metadata={
+                "system_name": system_name,
+                "true_mode": true_mode_key,
+                "true_mode_desc": true_mode_desc,
+                "divisor": divisor,
+                "target_remainder": target_remainder,
+                "clue": clue
+            }
         )
         
     def get_sample(self, min_ctx: Optional[int] = None, max_ctx: Optional[int] = None) -> BenchmarkTask:
