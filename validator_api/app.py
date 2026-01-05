@@ -153,7 +153,7 @@ def get_task_details(task_id: str, db: Session = Depends(get_db), hotkey: str = 
 def report_result(
     result_in: models.ResultCreate,
     db: Session = Depends(get_db),
-    validator_hotkey: str = Depends(auth.verify_signature)
+    validator_hotkey: str = Depends(auth.verify_validator_signature)  # Only validators can report
 ):
     """
     Validators report miner responses to the API.
