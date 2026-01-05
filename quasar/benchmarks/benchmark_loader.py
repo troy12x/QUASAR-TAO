@@ -205,7 +205,73 @@ class ContextualNeedleLoader:
         
         # 4. Build context parts
         context_parts = []
-        noise_pool = ["calibrating", "waiting for ack", "packet loss", "resyncing", "deploying hotifx", "handshake complete", "buffer flush", "checksum verified"]
+        
+        # Realistic noise that looks like actual system content
+        # Mix of technical logs, status reports, and configuration snippets
+        noise_templates = [
+            "System {system} reporting {status} at {timestamp}. Metrics: cpu={cpu}%, mem={mem}MB, net={net}Mbps.",
+            "Configuration update for module {module}: {param} set to {value}. Applied by admin {admin}.",
+            "Alert: {alert_type} detected in {component}. Threshold: {threshold}, Current: {current}.",
+            "Transaction {tx_id}: {action} completed. Duration: {duration}ms. Status: {status}.",
+            "User {user_id} performed {operation} on {resource}. Access level: {access_level}.",
+            "Backup process {backup_id} started. Target: {target}. Estimated size: {size}GB.",
+            "Service {service} health check: {health}. Response time: {response}ms. Uptime: {uptime}h.",
+            "Data synchronization between {source} and {dest}. Records processed: {records}. Errors: {errors}.",
+            "Security audit log: Event {event_id} from IP {ip}. User agent: {user_agent}.",
+            "Resource allocation: CPU cores {cores}, Memory {memory}GB, Disk {disk}GB, Network {network}Gbps."
+        ]
+        
+        noise_values = {
+            "system": ["Gorgon Drive", "Chimera Protocol", "Hydra Engine", "Pegasus Link", "Kraken Module", "Titan Core", "Vortex Array", "Nexus Bridge", "Omega System", "Zeta Interface"],
+            "status": ["operational", "degraded", "maintenance", "restarting", "idle", "busy", "overloaded", "synchronized"],
+            "timestamp": [f"{h:02d}:{m:02d}:{s:02d}" for h in range(24) for m in range(60) for s in range(60)],
+            "cpu": [f"{random.randint(10, 95)}" for _ in range(20)],
+            "mem": [f"{random.randint(512, 8192)}" for _ in range(20)],
+            "net": [f"{random.randint(10, 1000)}" for _ in range(20)],
+            "module": ["auth", "database", "cache", "queue", "scheduler", "monitor", "logger", "api"],
+            "param": ["timeout", "retry_count", "buffer_size", "max_connections", "log_level", "cache_ttl"],
+            "value": [f"{random.randint(1, 100)}", "true", "false", "enabled", "disabled"],
+            "admin": [f"admin_{i}" for i in range(10)],
+            "alert_type": ["latency_spike", "memory_leak", "connection_timeout", "disk_full", "cpu_overload"],
+            "component": ["worker_node", "database_shard", "cache_layer", "load_balancer", "message_queue"],
+            "threshold": [f"{random.randint(50, 95)}%", f"{random.randint(1000, 10000)}ms"],
+            "current": [f"{random.randint(10, 100)}%", f"{random.randint(500, 15000)}ms"],
+            "tx_id": [f"tx_{random.randint(100000, 999999)}" for _ in range(30)],
+            "action": ["read", "write", "update", "delete", "query", "execute", "commit", "rollback"],
+            "duration": [f"{random.randint(1, 500)}" for _ in range(30)],
+            "user_id": [f"user_{random.randint(1000, 9999)}" for _ in range(20)],
+            "operation": ["login", "logout", "upload", "download", "modify", "delete", "share", "export"],
+            "resource": ["document", "file", "folder", "project", "workspace", "dataset", "model"],
+            "access_level": ["read", "write", "admin", "owner", "guest"],
+            "backup_id": [f"backup_{random.randint(1, 999)}" for _ in range(20)],
+            "target": [f"/data/{random.randint(1, 100)}", f"/backup/{random.randint(1, 50)}"],
+            "size": [f"{random.randint(1, 500)}" for _ in range(20)],
+            "service": ["api_gateway", "auth_service", "data_service", "compute_service", "storage_service"],
+            "health": ["healthy", "degraded", "unhealthy", "starting", "stopping"],
+            "response": [f"{random.randint(10, 500)}" for _ in range(20)],
+            "uptime": [f"{random.randint(1, 720)}" for _ in range(20)],
+            "source": ["primary_db", "secondary_db", "cache_cluster", "message_queue"],
+            "dest": ["backup_storage", "analytics_db", "data_lake", "archive"],
+            "records": [f"{random.randint(100, 100000)}" for _ in range(20)],
+            "errors": [f"{random.randint(0, 50)}" for _ in range(20)],
+            "event_id": [f"evt_{random.randint(10000, 99999)}" for _ in range(30)],
+            "ip": [f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}" for _ in range(30)],
+            "user_agent": ["Mozilla/5.0", "Chrome/120.0", "Python/3.11", "curl/7.68", "Postman/7.0"],
+            "cores": [f"{random.randint(2, 64)}" for _ in range(10)],
+            "memory": [f"{random.randint(8, 256)}" for _ in range(10)],
+            "disk": [f"{random.randint(100, 2000)}" for _ in range(10)],
+            "network": [f"{random.randint(1, 100)}" for _ in range(10)]
+        }
+        
+        def generate_noise():
+            """Generate realistic-looking noise that's hard to filter."""
+            template = random.choice(noise_templates)
+            # Fill in template with random values
+            noise = template
+            for key, values in noise_values.items():
+                if f"{{{key}}}" in noise:
+                    noise = noise.replace(f"{{{key}}}", random.choice(values))
+            return noise
         
         # Add function signatures (no logic visible!)
         func_signatures = "\n".join([f"def {f}(x, multiplier, offset):" for f in all_functions])
@@ -251,7 +317,7 @@ class ContextualNeedleLoader:
         
         # Add noise to reach target length
         while sum(len(c) for c in context_parts) < target_len:
-            context_parts.append(f"LOG: {random.choice(noise_pool)} - {random.randint(100, 999)}")
+            context_parts.append(generate_noise())
         
         # Shuffle context (but keep tables together for readability)
         random.shuffle(context_parts)
