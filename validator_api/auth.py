@@ -21,9 +21,11 @@ def get_metagraph():
             _metagraph_cache = bt.metagraph(SUBNET_NETUID)
             _metagraph_cache_time = current_time
         except Exception as e:
-            # If we can't fetch metagraph, use cached version if available
-            if _metagraph_cache is None:
-                raise HTTPException(status_code=503, detail=f"Failed to fetch metagraph: {str(e)}")
+            # If we can't fetch metagraph, log the error but don't crash
+            import logging
+            logging.error(f"Failed to fetch metagraph for subnet {SUBNET_NETUID}: {e}")
+            # Return None to indicate metagraph is unavailable
+            return None
     
     return _metagraph_cache
 
@@ -51,6 +53,12 @@ def verify_signature(request: Request):
         
         # 2. Verify hotkey is registered on subnet 24
         metagraph = get_metagraph()
+        
+        if metagraph is None:
+            # Metagraph unavailable - allow access but log warning
+            import logging
+            logging.warning(f"Metagraph unavailable for subnet {SUBNET_NETUID}, skipping subnet check")
+            return hotkey
         
         # Check if hotkey exists in metagraph
         if hotkey not in metagraph.hotkeys:
