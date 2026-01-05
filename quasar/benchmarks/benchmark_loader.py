@@ -32,7 +32,22 @@ class BenchmarkLoader:
         
         self.cache = {} # task_type -> List[BenchmarkTask]
         self.real_loader = ContextualNeedleLoader()
-        bt.logging.info(f"📚 BenchmarkLoader initialized | Mode: EXECUTION_RIDGE")
+        
+        # Try to import LongBenchLoader
+        self.longbench_loader = None
+        try:
+            from benchmarks.longbench_loader import LongBenchLoader
+            self.longbench_loader = LongBenchLoader(self.longbench_config)
+            if self.longbench_loader.is_available():
+                bt.logging.info(f"📚 BenchmarkLoader initialized | LongBench available: {self.longbench_loader.enabled_tasks}")
+            else:
+                bt.logging.warning("LongBench data not found, falling back to synthetic tasks")
+                self.longbench_loader = None
+        except ImportError as e:
+            bt.logging.warning(f"Could not import LongBenchLoader: {e}")
+        
+        if not self.longbench_loader:
+            bt.logging.info(f"📚 BenchmarkLoader initialized | Mode: EXECUTION_RIDGE (synthetic only)")
 
     def load_benchmark_tasks(
         self, 
@@ -60,13 +75,27 @@ class BenchmarkLoader:
 
 
     def _load_longbench_tasks(self, count: int, difficulty: Optional[str] = None, min_ctx: Optional[int] = None, max_ctx: Optional[int] = None) -> List[BenchmarkTask]:
-        """Internal: Load contextual execution tasks."""
+        """Internal: Load LongBench tasks or fallback to synthetic tasks."""
         loaded_tasks = []
-        for _ in range(count):
-            # Use the new ContextualNeedleLoader
-            task = self.real_loader.get_sample(min_ctx, max_ctx)
-            if task:
-                loaded_tasks.append(task)
+        
+        # Try to load real LongBench tasks first
+        if self.longbench_loader:
+            try:
+                context_range = (min_ctx, max_ctx) if min_ctx and max_ctx else None
+                longbench_tasks = self.longbench_loader.load_tasks(count, context_range)
+                loaded_tasks.extend(longbench_tasks)
+                bt.logging.info(f"Loaded {len(longbench_tasks)} LongBench tasks")
+            except Exception as e:
+                bt.logging.error(f"Error loading LongBench tasks: {e}")
+        
+        # Fallback to synthetic tasks if needed
+        if len(loaded_tasks) < count:
+            remaining = count - len(loaded_tasks)
+            bt.logging.info(f"Falling back to {remaining} synthetic tasks")
+            for _ in range(remaining):
+                task = self.real_loader.get_sample(min_ctx, max_ctx)
+                if task:
+                    loaded_tasks.append(task)
                 
         return loaded_tasks
 
