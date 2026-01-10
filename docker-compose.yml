@@ -3,9 +3,7 @@ version: '3.8'
 services:
   # Challenge Container
   challenge:
-    build:
-      context: .
-      dockerfile: challenge/Dockerfile
+    image: silxai/quasar-challenge:latest
     container_name: quasar-challenge
     restart: unless-stopped
     
@@ -28,9 +26,7 @@ services:
 
   # Validator Node
   validator:
-    build:
-      context: validator
-      dockerfile: Dockerfile
+    image: silxai/quasar-validator:latest
     container_name: quasar-validator
     restart: unless-stopped
     

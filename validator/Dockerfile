@@ -9,13 +9,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Cargo.toml and Cargo.lock
-COPY validator/Cargo.toml validator/Cargo.lock* ./
+COPY Cargo.toml Cargo.lock* ./
 
 # Build dependencies
 RUN cargo build --release 2>&1 || true
 
 # Copy source code
-COPY validator/src ./src/
+COPY src ./src/
 
 # Build the application
 RUN cargo build --release
