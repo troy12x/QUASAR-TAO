@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bittensor::{subtensor::Subtensor, Keypair};
 use clap::Parser;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -63,32 +62,22 @@ struct MinerInfo {
 
 struct Validator {
     args: Args,
-    keypair: Keypair,
-    subtensor: Subtensor,
     client: Client,
     challenge_url: String,
 }
 
 impl Validator {
     async fn new(args: Args) -> Result<Self> {
-        // Load keypair from wallet
-        info!("Loading wallet: {}/{}", args.wallet_name, args.hotkey);
-        // Note: In production, load from Bittensor wallet directory
-        let keypair = Keypair::from_mnemonic("bottom metal radar abuse cool bamboo agent reveal fever bachelor way ranch")?;
-        
-        // Connect to subtensor
-        info!("Connecting to subtensor network: {}", args.network);
-        let subtensor = Subtensor::new(&args.network)?;
-        
         // Create HTTP client
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()?;
         
+        info!("Validator initialized");
+        info!("Challenge URL: {}", args.challenge_url);
+        
         Ok(Self {
             args,
-            keypair,
-            subtensor,
             client,
             challenge_url: args.challenge_url,
         })
@@ -142,25 +131,15 @@ impl Validator {
     async fn run_epoch(&self) -> Result<()> {
         info!("Starting epoch evaluation...");
 
-        // Get metagraph to find miners
-        let metagraph = self.subtensor.metagraph(self.args.netuid)?;
-        info!("Found {} neurons in metagraph", metagraph.n);
-
-        // Collect miners (neurons with stake < 1000 are miners)
-        let mut miners = Vec::new();
-        for (i, hotkey) in metagraph.hotkeys.iter().enumerate() {
-            let stake = metagraph.S[i];
-            // Miners have low stake or no stake
-            if stake < 1000.0 {
-                // In production, get model endpoint from miner registration
-                // For now, use placeholder
-                miners.push(MinerInfo {
-                    hotkey: hotkey.clone(),
-                    model_endpoint: format!("http://{}:8000/generate", hotkey),
-                    model_api_key: None,
-                });
-            }
-        }
+        // For now, use a fixed list of miners
+        // In production, this would come from the validator API
+        let miners = vec![
+            MinerInfo {
+                hotkey: "miner_hotkey_1".to_string(),
+                model_endpoint: "http://localhost:8000/generate".to_string(),
+                model_api_key: None,
+            },
+        ];
 
         info!("Found {} miners to evaluate", miners.len());
 
@@ -177,35 +156,11 @@ impl Validator {
             }
         }
 
-        // Submit weights to Bittensor
+        // Log scores (in production, submit to validator API)
         if !scores.is_empty() {
-            info!("Submitting weights for {} miners", scores.len());
-            
-            // Convert scores to weights
-            let uids: Vec<u16> = metagraph.hotkeys
-                .iter()
-                .enumerate()
-                .filter(|(_, h)| scores.iter().any(|(hotkey, _)| hotkey == *h))
-                .map(|(i, _)| i as u16)
-                .collect();
-            
-            let weights: Vec<f64> = scores
-                .iter()
-                .map(|(_, score)| *score)
-                .collect();
-
-            // Normalize weights
-            let total: f64 = weights.iter().sum();
-            let normalized_weights: Vec<f64> = weights
-                .iter()
-                .map(|w| w / total)
-                .collect();
-
-            // Submit weights
-            // Note: In production, use proper Bittensor weight submission
-            info!("Would submit weights:");
-            for (uid, weight) in uids.iter().zip(normalized_weights.iter()) {
-                info!("  UID {}: {:.4}", uid, weight);
+            info!("Evaluation complete:");
+            for (hotkey, score) in &scores {
+                info!("  {}: {:.4}", hotkey, score);
             }
         }
 
@@ -215,7 +170,6 @@ impl Validator {
     async fn run(&self) -> Result<()> {
         info!("Starting validator node...");
         info!("  NetUID: {}", self.args.netuid);
-        info!("  Hotkey: {}", self.keypair.ss58_address());
         info!("  Challenge URL: {}", self.challenge_url);
 
         loop {
