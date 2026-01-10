@@ -31,6 +31,13 @@ CHALLENGE_PORT = int(os.getenv("CHALLENGE_PORT", "8080"))
 SAMPLES_PER_EVALUATION = int(os.getenv("SAMPLES_PER_EVALUATION", "50"))
 TIMEOUT_SECS = int(os.getenv("TIMEOUT_SECS", "300"))
 
+# Parse command line arguments
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--port", type=int, default=CHALLENGE_PORT)
+args = parser.parse_args()
+CHALLENGE_PORT = args.port
+
 # Initialize dataset
 print(f"🔄 Loading docmath dataset from {DATASET_PATH}...")
 dataset = DocmathDataset(DATASET_PATH)
