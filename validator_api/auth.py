@@ -47,8 +47,14 @@ def verify_signature(request: Request):
 
     try:
         # 1. Verify signature
+        # Decode hex signature to bytes
+        try:
+            signature_bytes = bytes.fromhex(signature)
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid signature format. Expected hex string")
+        
         keypair = bt.Keypair(ss58_address=hotkey)
-        if not keypair.verify(hotkey, signature):
+        if not keypair.verify(hotkey.encode(), signature_bytes):
             raise HTTPException(status_code=401, detail="Invalid signature")
         
         # 2. Verify hotkey is registered on subnet 24
