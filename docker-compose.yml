@@ -79,6 +79,8 @@ services:
 # Each miner runs their own Python script:
 #   python miner/server.py --port 8000
 
+# testing work for godsake
+
 networks:
   quasar-net:
     driver: bridge
