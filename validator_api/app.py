@@ -15,13 +15,11 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-import quasar
-from quasar.benchmarks.benchmark_loader import BenchmarkLoader
-
-import hashlib
 from . import models
 from . import auth
 from . import scoring
+from . import docmath_loader
+from . import answer_extractor
 from .database import engine, get_db
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,15 +37,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize BenchmarkLoader
-print("🔄 Initializing BenchmarkLoader in API...")
-loader = BenchmarkLoader(config={
-    'mrcr': {
-        'enabled': True,
-        'n_needles_range': [2, 4, 8]
-    }
-})
-print("✅ BenchmarkLoader ready.")
+# Initialize DocmathDataset
+print("🔄 Initializing DocmathDataset in API...")
+docmath_dataset = docmath_loader.DocmathDataset()
+print(f"✅ DocmathDataset ready with {len(docmath_dataset)} samples.")
 
 # League configuration
 LEAGUES = ["100k", "200k", "300k", "400k", "500k", "600k", "700k", "800k", "900k", "1M"]
@@ -77,34 +70,36 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/get_task", response_model=models.MinerTaskResponse)
-def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
+def get_task(db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
     """
-    Generates a new production task using BenchmarkLoader.
+    Returns a random sample from docmath dataset.
     Returns task WITHOUT expected_output for miners.
     """
-    print(f"📥 [GET_TASK] Request from {hotkey[:8]}... (max_ctx: {max_context_length})")
-    difficulty = random.choice(["easy", "medium", "hard", "extreme"])
-    print(f"🎲 [GET_TASK] Selected difficulty: {difficulty}")
-    tasks = loader.load_benchmark_tasks(1, benchmark_types=['longbench'], difficulty=difficulty, max_context_length=max_context_length)
+    print(f"📥 [GET_TASK] Request from {hotkey[:8]}...")
     
-    if not tasks:
-        print("❌ [GET_TASK] Failed to generate task!")
-        raise HTTPException(status_code=500, detail="Failed to generate task")
+    # Sample from docmath dataset
+    samples = docmath_dataset.sample(n=1)
     
-    task = tasks[0]
-    print(f"📤 [GET_TASK] Generated task: {task.task_id} (len: {task.context_length})")
+    if not samples:
+        print("❌ [GET_TASK] Failed to sample from dataset!")
+        raise HTTPException(status_code=500, detail="Failed to sample from dataset")
+    
+    sample = samples[0]
+    task_id = f"docmath_{sample.sample_id}"
+    
+    print(f"📤 [GET_TASK] Generated task: {task_id}")
     
     # Store in DB
     db_task = models.Task(
-        id=task.task_id,
-        dataset_name=task.dataset_name,
-        task_type=task.task_type,
-        context=task.context,
-        prompt=task.prompt,
-        expected_output=task.expected_output,
-        context_length=task.context_length,
-        difficulty_level=task.difficulty_level,
-        evaluation_metrics=",".join(task.evaluation_metrics)
+        id=task_id,
+        dataset_name="docmath",
+        task_type="qa",
+        context=sample.get_prompt_text(),
+        prompt=sample.get_prompt_text(),
+        expected_output=sample.ground_truth,
+        context_length=len(sample.get_prompt_text()),
+        difficulty_level="medium",
+        evaluation_metrics="accuracy"
     )
     db.add(db_task)
     db.commit()
@@ -119,7 +114,7 @@ def get_task(max_context_length: Optional[int] = None, db: Session = Depends(get
         prompt=db_task.prompt,
         context_length=db_task.context_length,
         difficulty_level=db_task.difficulty_level,
-        evaluation_metrics=db_task.evaluation_metrics.split(",") if db_task.evaluation_metrics else [],
+        evaluation_metrics=["accuracy"],
         created_at=db_task.created_at
     )
 
@@ -183,14 +178,20 @@ def report_result(
         print(f"ℹ️ [REPORT_RESULT] Already reported by {result_in.miner_hotkey[:8]}")
         return {"status": "already_reported", "score": existing_result.score}
 
-    # 4. Calculate base accuracy score (0.0 - 1.0)
-    base_score, method = scoring.calculate_score(
-        response_text=resp_text,
-        expected_output=db_task.expected_output,
-        dataset_name=db_task.dataset_name,
-        context_length=db_task.context_length,
-        all_classes=result_in.all_classes
+    # 4. Extract answer and compare with ground truth using docmath logic
+    ground_truth = db_task.expected_output
+    expected_answer = answer_extractor.extract_answer(ground_truth) or ground_truth
+    
+    is_correct, predicted_answer = answer_extractor.extract_and_compare(
+        resp_text, 
+        expected_answer,
+        tolerance=0.0
     )
+    
+    # Base score: 1.0 if correct, 0.0 if incorrect
+    base_score = 1.0 if is_correct else 0.0
+    
+    method = "docmath_rule_based"
 
     # 5. Determine league from context length
     league = get_league(db_task.context_length)
@@ -244,7 +245,7 @@ def report_result(
         reg.score = alpha * final_score + (1 - alpha) * reg.score
         reg.tasks_completed += 1
 
-        print(f"🎯 [REPORT_RESULT] {model_name}/{league}: base={base_score:.4f}, norm={normalized_score:.4f}, final={final_score:.4f}")
+    print(f"🎯 [REPORT_RESULT] Answer extraction: predicted={predicted_answer}, truth={expected_answer}, correct={is_correct}")
 
     # 8. Save result
     db_result = models.Result(

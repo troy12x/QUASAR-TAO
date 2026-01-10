@@ -80,6 +80,12 @@ class Validator(BaseValidatorNeuron):
         self.total_tasks = 0
         self.current_benchmark = None
         
+        # Active miners tracking for handshake
+        self.active_miners = {}
+        
+        # Latency tracking
+        self.task_latencies = {}
+        
         super(Validator, self).__init__(config=config)
         bt.logging.info("🚀 Initializing Professional Long Context Validator...")
         
@@ -229,15 +235,138 @@ class Validator(BaseValidatorNeuron):
             bt.logging.error(f"❌ API Call Error ({endpoint}): {e}")
             return None
 
+    async def run_handshake_phase(self, round_id: str) -> None:
+        """Check miner liveness before dispatch."""
+        
+        # Get all miners from metagraph
+        all_uids = [uid for uid in range(len(self.metagraph.axons)) if self.metagraph.axons[uid].is_serving and uid != self.uid]
+        
+        if not all_uids:
+            bt.logging.warning("No serving miners found for handshake")
+            self.active_miners[round_id] = []
+            return
+        
+        # Send handshake to all miners
+        handshake = quasar.protocol.StartRoundSynapse(
+            round_id=round_id,
+            timestamp=int(time.time())
+        )
+        
+        bt.logging.info(f"🤝 Sending handshake to {len(all_uids)} miners...")
+        
+        try:
+            responses = await self.dendrite(
+                axons=[self.metagraph.axons[uid] for uid in all_uids],
+                synapse=handshake,
+                deserialize=False,
+                timeout=10
+            )
+        except Exception as e:
+            bt.logging.error(f"Handshake failed: {e}")
+            self.active_miners[round_id] = []
+            return
+        
+        # Track which miners are ready
+        self.active_miners[round_id] = []
+        
+        for uid, response in zip(all_uids, responses):
+            if response and response.is_ready:
+                self.active_miners[round_id].append(uid)
+                bt.logging.info(f"  Miner {uid} is ready (capacity={response.available_capacity}, version={response.miner_version})")
+            else:
+                bt.logging.warning(f"  Miner {uid} is not ready or offline")
+        
+        bt.logging.success(f"✅ Handshake complete: {len(self.active_miners[round_id])}/{len(all_uids)} miners ready")
+
+    async def send_feedback(self, round_id: str, task_id: str, scores: dict, latencies: dict) -> None:
+        """Send feedback to miners after evaluation."""
+        
+        active_uids = self.active_miners.get(round_id, [])
+        
+        if not active_uids:
+            return
+        
+        for uid in active_uids:
+            score = scores.get(uid, 0.0)
+            latency = latencies.get(uid, 0.0)
+            
+            feedback = quasar.protocol.TaskFeedbackSynapse(
+                round_id=round_id,
+                task_id=task_id,
+                score=score,
+                latency_seconds=latency,
+                feedback_text=f"Your score: {score:.4f}",
+                suggestions="Keep improving!" if score < 0.5 else "Great job!"
+            )
+            
+            try:
+                response = await self.dendrite(
+                    axons=[self.metagraph.axons[uid]],
+                    synapse=feedback,
+                    deserialize=False,
+                    timeout=10
+                )
+                
+                if response and response.acknowledged:
+                    bt.logging.info(f"  Feedback sent to miner {uid}: score={score:.4f}")
+            except Exception as e:
+                bt.logging.warning(f"Failed to send feedback to miner {uid}: {e}")
+
+    async def send_cleanup(self, round_id: str, task_id: str, validation_results: dict) -> None:
+        """Send cleanup signal to miners."""
+        
+        active_uids = self.active_miners.get(round_id, [])
+        
+        if not active_uids:
+            return
+        
+        for uid in active_uids:
+            # Get validation result for this miner
+            uid_result = validation_results.get(uid, {"score": 0.0})
+            
+            cleanup = quasar.protocol.TaskCleanupSynapse(
+                task_id=task_id,
+                validation_response=uid_result
+            )
+            
+            try:
+                response = await self.dendrite(
+                    axons=[self.metagraph.axons[uid]],
+                    synapse=cleanup,
+                    deserialize=False,
+                    timeout=10
+                )
+                
+                if response and response.acknowledged:
+                    if response.cleanup_ok:
+                        bt.logging.info(f"  Cleanup ok for miner {uid}")
+                    else:
+                        bt.logging.warning(f"  Cleanup failed for miner {uid}: {response.error_message}")
+            except Exception as e:
+                bt.logging.warning(f"Failed to send cleanup to miner {uid}: {e}")
+
     async def forward(self):
         """Main Validation Loop"""
         bt.logging.info("➡️ Entering forward loop...")
         bt.logging.info("\n" + "═"*50)
         bt.logging.info("➡️  [VALIDATOR] STARTING NEW FORWARD CYCLE...")
         bt.logging.info("═"*50)
+        
+        # Generate round ID for this cycle
+        round_id = f"round_{self.step}_{int(time.time())}"
+        
         try:
             async with self.semaphore: # Limit concurrency
-                # 1. Task Gen (Fetch from API)
+                # Phase 1: Handshake - Check miner liveness
+                await self.run_handshake_phase(round_id)
+                
+                # Check if we have active miners
+                active_uids = self.active_miners.get(round_id, [])
+                if not active_uids:
+                    bt.logging.warning("No active miners after handshake, skipping round")
+                    return
+                
+                # 2. Task Gen (Fetch from API)
                 max_ctx = getattr(self.config.neuron, 'max_context_length', None)
                 api_task = self._call_api("get_task", params={"max_context_length": max_ctx})
                 
@@ -264,7 +393,7 @@ class Validator(BaseValidatorNeuron):
                     print("⚠️  [VALIDATOR] Task Generation Failed!")
                     return
 
-                # 2. Context Bucket logic
+                # 3. Context Bucket logic
                 bucket_name = self.get_bucket(task.context_length)
                 
                 # Track benchmark progress
@@ -396,13 +525,22 @@ class Validator(BaseValidatorNeuron):
                 
                 # 6. Sync Authoritative Scores from API for Weight Setting
                 self.sync_scores_from_api()
+                
+                # 7. Send feedback to miners
+                scores_dict = {uid: rewards[i] if i < len(rewards) else 0.0 for i, uid in enumerate(miner_uids)}
+                latencies_dict = {uid: float(getattr(responses[i], 'processing_time', 0.0) or 0.0) if i < len(responses) else 0.0 for i, uid in enumerate(miner_uids)}
+                await self.send_feedback(round_id, task.task_id, scores_dict, latencies_dict)
+                
+                # 8. Send cleanup to miners
+                validation_results = {uid: {"score": scores_dict.get(uid, 0.0)} for uid in miner_uids}
+                await self.send_cleanup(round_id, task.task_id, validation_results)
 
-                # 7. Log
+                # 9. Log
                 # Note: self.last_raw_accuracies might not be accurately populated locally anymore if we move scoring entirely to API.
                 # For now, we continue to compute it locally for internal logging if needed, or rely on API returns.
                 self.log_metrics(rewards, miner_uids, bucket_name, task, responses)
 
-                # 8. Persistence
+                # 10. Persistence
                 if self.step % 50 == 0:
                     self.save_state()
 

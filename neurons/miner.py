@@ -44,6 +44,9 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
         
+        # Track active tasks for cleanup
+        self.active_tasks = {}
+        
         bt.logging.info("Initializing Long Context Miner...")
         print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
         
@@ -264,8 +267,15 @@ DO NOT include any text after the box."""}
             ]
             response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
             
-            # print(f"[MINER] ✅ Generated Response: {response}")  # Commented to reduce log spam
-            bt.logging.info(f"✅ Generated response length: {len(response)} chars")
+            # print(f"[MINER]  Generated Response: {response}")  # Commented to reduce log spam
+            bt.logging.info(f" [MINER] Generated response length: {len(response)} chars")
+            
+            # Store task for cleanup later
+            self.active_tasks[synapse.task_id] = {
+                "start_time": time.time(),
+                "context": context,
+                "prompt": prompt
+            }
             
             synapse.response = response
             synapse.processing_time = time.time() - start_time
@@ -315,6 +325,86 @@ DO NOT include any text after the box."""}
             f"Prioritizing {synapse.dendrite.hotkey} with value: {prirority}"
         )
         return prirority
+
+    async def forward_start_round(self, synapse: quasar.protocol.StartRoundSynapse) -> quasar.protocol.StartRoundSynapse:
+        """Handle handshake from validator to check liveness."""
+        
+        # Set miner status
+        synapse.is_ready = True
+        synapse.available_capacity = 1  # Can handle 1 task at a time
+        synapse.miner_version = "quasar-v1.0"
+        synapse.error_message = None
+        
+        bt.logging.info(f"Handshake received: round_id={synapse.round_id}")
+        print(f"  [MINER] Handshake: round_id={synapse.round_id}")
+        
+        return synapse
+
+    async def forward_feedback(self, synapse: quasar.protocol.TaskFeedbackSynapse) -> quasar.protocol.TaskFeedbackSynapse:
+        """Handle feedback from validator after evaluation."""
+        
+        # Log feedback
+        bt.logging.info(
+            f"Feedback received: task_id={synapse.task_id} "
+            f"score={synapse.score:.4f} "
+            f"latency={synapse.latency_seconds:.2f}s"
+        )
+        print(f"  [MINER] Feedback: task_id={synapse.task_id} score={synapse.score:.4f} latency={synapse.latency_seconds:.2f}s")
+        
+        if synapse.feedback_text:
+            bt.logging.info(f"  Feedback: {synapse.feedback_text}")
+        
+        if synapse.suggestions:
+            bt.logging.info(f"  Suggestions: {synapse.suggestions}")
+        
+        # Acknowledge receipt
+        synapse.acknowledged = True
+        
+        return synapse
+
+    async def forward_cleanup(self, synapse: quasar.protocol.TaskCleanupSynapse) -> quasar.protocol.TaskCleanupSynapse:
+        """Handle cleanup signal from validator."""
+        
+        task_id = synapse.task_id
+        
+        try:
+            # Clean up resources for this task
+            if task_id in self.active_tasks:
+                # Remove from active tasks
+                del self.active_tasks[task_id]
+                
+                # Clean up any temporary files
+                temp_dir = f"/tmp/quasar_task_{task_id}"
+                if os.path.exists(temp_dir):
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    bt.logging.info(f"  Cleanup: Removed temp directory {temp_dir}")
+                
+                # Clean up GPU memory if needed
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                synapse.acknowledged = True
+                synapse.cleanup_ok = True
+                synapse.error_message = None
+                
+                bt.logging.info(f"Cleanup completed for task {task_id}")
+                print(f"  [MINER] Cleanup: task_id={task_id} OK")
+            else:
+                synapse.acknowledged = True
+                synapse.cleanup_ok = True
+                synapse.error_message = "Task not found in active tasks"
+                bt.logging.info(f"Cleanup: task {task_id} not in active tasks")
+                
+        except Exception as e:
+            synapse.acknowledged = True
+            synapse.cleanup_ok = False
+            synapse.error_message = str(e)
+            
+            bt.logging.error(f"Cleanup failed for task {task_id}: {e}")
+            print(f"  [MINER] Cleanup failed: {task_id} - {e}")
+        
+        return synapse
 
     def _get_signature(self) -> str:
         """Sign the hotkey address to authenticate with the API."""

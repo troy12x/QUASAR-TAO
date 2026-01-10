@@ -572,6 +572,75 @@ class ScalingTestSynapse(bt.Synapse):
         }
 
 
+class StartRoundSynapse(bt.Synapse):
+    """Handshake synapse to check miner liveness before task dispatch."""
+    
+    round_id: str
+    timestamp: int
+    
+    # Miner response fields
+    is_ready: bool = False
+    available_capacity: int = 0
+    miner_version: str = ""
+    error_message: Optional[str] = None
+    
+    def deserialize(self) -> Dict[str, Any]:
+        return {
+            "round_id": self.round_id,
+            "timestamp": self.timestamp,
+            "is_ready": self.is_ready,
+            "available_capacity": self.available_capacity,
+            "miner_version": self.miner_version,
+            "error_message": self.error_message
+        }
+
+
+class TaskFeedbackSynapse(bt.Synapse):
+    """Feedback synapse to send scores back to miners after evaluation."""
+    
+    round_id: str
+    task_id: str
+    score: float
+    latency_seconds: float
+    feedback_text: Optional[str] = None
+    suggestions: Optional[str] = None
+    
+    # Miner response
+    acknowledged: bool = False
+    
+    def deserialize(self) -> Dict[str, Any]:
+        return {
+            "round_id": self.round_id,
+            "task_id": self.task_id,
+            "score": self.score,
+            "latency_seconds": self.latency_seconds,
+            "feedback_text": self.feedback_text,
+            "suggestions": self.suggestions,
+            "acknowledged": self.acknowledged
+        }
+
+
+class TaskCleanupSynapse(bt.Synapse):
+    """Cleanup synapse for post-validation cleanup."""
+    
+    task_id: str
+    validation_response: Dict[str, Any]
+    
+    # Miner response
+    acknowledged: bool = False
+    cleanup_ok: bool = False
+    error_message: Optional[str] = None
+    
+    def deserialize(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "validation_response": self.validation_response,
+            "acknowledged": self.acknowledged,
+            "cleanup_ok": self.cleanup_ok,
+            "error_message": self.error_message
+        }
+
+
 class BenchmarkEvaluationSynapse(bt.Synapse):
     """
     Specialized synapse for real-world benchmark evaluation tasks.
