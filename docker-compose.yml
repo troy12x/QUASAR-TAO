@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # Challenge Container
+  challenge:
+    build:
+      context: .
+      dockerfile: challenge/Dockerfile
+    container_name: quasar-challenge
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATASET_PATH=/data/docmath.jsonl
+      - CHALLENGE_HOST=0.0.0.0
+      - CHALLENGE_PORT=8080
+      - SAMPLES_PER_EVALUATION=10
+      - TIMEOUT_SECS=300
+    networks:
+      - quasar-net
+
+  # Miner API
+  miner:
+    build:
+      context: .
+      dockerfile: miner/Dockerfile
+    container_name: quasar-miner
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct
+      - HOST=0.0.0.0
+      - PORT=8000
+      - MAX_NEW_TOKENS=100
+    networks:
+      - quasar-net
+    depends_on:
+      - challenge
+
+  # Validator Node
+  validator:
+    build:
+      context: validator
+      dockerfile: Dockerfile
+    container_name: quasar-validator
+    environment:
+      - NETUID=24
+      - WALLET_NAME=validator
+      - HOTKEY=default
+      - CHALLENGE_URL=http://challenge:8080
+      - NETWORK=finney
+    networks:
+      - quasar-net
+    depends_on:
+      - challenge
+      - miner
+
+networks:
+  quasar-net:
+    driver: bridge

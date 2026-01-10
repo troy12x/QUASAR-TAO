@@ -1,0 +1,270 @@
+"""Challenge Server for QUASAR-SUBNET
+
+Evaluates miner submissions by querying their model endpoints
+and scoring answers against the docmath dataset.
+"""
+
+import os
+import sys
+import json
+import time
+import uuid
+import requests
+from typing import List, Dict, Any
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+
+# Add parent directory to path to import validator_api modules
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from validator_api.docmath_loader import DocmathDataset
+from validator_api.answer_extractor import extract_and_compare
+
+# Configuration
+DATASET_PATH = os.getenv("DATASET_PATH", "/data/docmath.jsonl")
+CHALLENGE_HOST = os.getenv("CHALLENGE_HOST", "0.0.0.0")
+CHALLENGE_PORT = int(os.getenv("CHALLENGE_PORT", "8080"))
+SAMPLES_PER_EVALUATION = int(os.getenv("SAMPLES_PER_EVALUATION", "50"))
+TIMEOUT_SECS = int(os.getenv("TIMEOUT_SECS", "300"))
+
+# Initialize dataset
+print(f"🔄 Loading docmath dataset from {DATASET_PATH}...")
+dataset = DocmathDataset(DATASET_PATH)
+print(f"✅ Dataset loaded with {len(dataset)} samples")
+
+# Create FastAPI app
+app = FastAPI(title="QUASAR-SUBNET Challenge Server")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Pydantic models
+class EvaluationRequest(BaseModel):
+    request_id: str
+    submission_id: str
+    participant_id: str
+    data: Dict[str, Any]
+    metadata: Dict[str, Any] = {}
+    epoch: int
+    deadline: int
+
+
+class EvaluationResponse(BaseModel):
+    request_id: str
+    success: bool
+    error: str = None
+    score: float
+    results: Dict[str, Any]
+    execution_time_ms: int
+    cost: float = None
+
+
+class HealthResponse(BaseModel):
+    status: str
+    dataset_size: int
+    version: str
+
+
+class ConfigResponse(BaseModel):
+    challenge_id: str
+    version: str
+    evaluation_config: Dict[str, Any]
+
+
+def query_miner_model(model_endpoint: str, prompt: str, api_key: str = None) -> str:
+    """Query the miner's model endpoint"""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    
+    payload = {
+        "prompt": [{"role": "user", "content": prompt}],
+        "max_tokens": 100,
+        "temperature": 0.0
+    }
+    
+    try:
+        response = requests.post(
+            model_endpoint,
+            json=payload,
+            headers=headers,
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("output", "")
+    except Exception as e:
+        print(f"  ❌ Error querying miner model: {e}")
+        return ""
+
+
+@app.get("/health", response_model=HealthResponse)
+def health_check():
+    """Health check endpoint"""
+    return HealthResponse(
+        status="healthy",
+        dataset_size=len(dataset),
+        version="1.0.0"
+    )
+
+
+@app.get("/config", response_model=ConfigResponse)
+def get_config():
+    """Get challenge configuration"""
+    return ConfigResponse(
+        challenge_id="quasar-subnet",
+        version="1.0.0",
+        evaluation_config={
+            "samples_per_evaluation": SAMPLES_PER_EVALUATION,
+            "timeout_secs": TIMEOUT_SECS,
+            "max_retries": 3
+        }
+    )
+
+
+@app.post("/evaluate", response_model=EvaluationResponse)
+def evaluate(request: EvaluationRequest):
+    """Evaluate a miner submission"""
+    print(f"\n📥 [EVALUATE] Request: {request.request_id}")
+    print(f"  Submission ID: {request.submission_id}")
+    print(f"  Participant ID: {request.participant_id}")
+    
+    start_time = time.time()
+    
+    try:
+        # Get miner model endpoint
+        model_endpoint = request.data.get("model_endpoint")
+        model_api_key = request.data.get("model_api_key")
+        
+        if not model_endpoint:
+            raise HTTPException(status_code=400, detail="Missing model_endpoint in request data")
+        
+        print(f"  Model endpoint: {model_endpoint}")
+        
+        # Sample questions from dataset
+        samples = dataset.sample(n=SAMPLES_PER_EVALUATION)
+        print(f"  Sampled {len(samples)} questions")
+        
+        # Evaluate each sample
+        results = []
+        correct_count = 0
+        failed_count = 0
+        timeout_count = 0
+        
+        for i, sample in enumerate(samples):
+            prompt_text = sample.get_prompt_text()
+            expected_answer = sample.get_expected_answer()
+            
+            print(f"  [{i+1}/{len(samples)}] Querying model...")
+            
+            # Query miner model
+            model_output = query_miner_model(model_endpoint, prompt_text, model_api_key)
+            
+            if not model_output:
+                failed_count += 1
+                results.append({
+                    "sample_id": sample.sample_id,
+                    "correct": False,
+                    "predicted": None,
+                    "ground_truth": expected_answer,
+                    "error": "Failed to query model"
+                })
+                continue
+            
+            # Extract and compare answer
+            is_correct, predicted = extract_and_compare(model_output, expected_answer)
+            
+            if is_correct:
+                correct_count += 1
+                print(f"    ✅ Correct: {predicted}")
+            else:
+                print(f"    ❌ Incorrect: {predicted} (expected: {expected_answer})")
+            
+            results.append({
+                "sample_id": sample.sample_id,
+                "correct": is_correct,
+                "predicted": predicted,
+                "ground_truth": expected_answer
+            })
+        
+        # Calculate score
+        total_evaluated = len(results)
+        score = correct_count / total_evaluated if total_evaluated > 0 else 0.0
+        
+        execution_time_ms = int((time.time() - start_time) * 1000)
+        
+        print(f"\n📊 [EVALUATE] Results:")
+        print(f"  Total samples: {len(samples)}")
+        print(f"  Evaluated: {total_evaluated}")
+        print(f"  Correct: {correct_count}")
+        print(f"  Failed: {failed_count}")
+        print(f"  Timeout: {timeout_count}")
+        print(f"  Score: {score:.4f}")
+        print(f"  Execution time: {execution_time_ms}ms")
+        
+        return EvaluationResponse(
+            request_id=request.request_id,
+            success=True,
+            error=None,
+            score=score,
+            results={
+                "total_samples": len(samples),
+                "correct": correct_count,
+                "failed": failed_count,
+                "timeout": timeout_count,
+                "details": results
+            },
+            execution_time_ms=execution_time_ms,
+            cost=None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        execution_time_ms = int((time.time() - start_time) * 1000)
+        print(f"❌ [EVALUATE] Error: {e}")
+        
+        return EvaluationResponse(
+            request_id=request.request_id,
+            success=False,
+            error=str(e),
+            score=0.0,
+            results={},
+            execution_time_ms=execution_time_ms,
+            cost=None
+        )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    print("=" * 60)
+    print("QUASAR-SUBNET CHALLENGE SERVER")
+    print("=" * 60)
+    print(f"Host: {CHALLENGE_HOST}")
+    print(f"Port: {CHALLENGE_PORT}")
+    print(f"Dataset: {DATASET_PATH}")
+    print(f"Samples per evaluation: {SAMPLES_PER_EVALUATION}")
+    print(f"Timeout: {TIMEOUT_SECS}s")
+    print("\nEndpoints:")
+    print("  GET  /health   - Health check")
+    print("  GET  /config   - Challenge configuration")
+    print("  POST /evaluate - Evaluate miner submission")
+    print("=" * 60)
+    
+    uvicorn.run(
+        app,
+        host=CHALLENGE_HOST,
+        port=CHALLENGE_PORT,
+        log_level="info"
+    )
