@@ -153,21 +153,27 @@ class Miner(BaseMinerNeuron):
 
     def _fetch_task_from_api(self) -> Optional[dict]:
         """Fetch a task from validator_api."""
-        try:
-            headers = self._get_auth_headers()
-            
-            response = requests.get(
-                f"{self.validator_api_url}/get_task",
-                headers=headers,
-                timeout=30
-            )
-            response.raise_for_status()
-            data = response.json()
-            bt.logging.info(f"📥 Fetched task: {data['id']}")
-            return data
-        except Exception as e:
-            bt.logging.warning(f"⚠️ Failed to fetch task: {e}")
-            return None
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                headers = self._get_auth_headers()
+                
+                response = requests.get(
+                    f"{self.validator_api_url}/get_task",
+                    headers=headers,
+                    timeout=30
+                )
+                response.raise_for_status()
+                data = response.json()
+                bt.logging.info(f"📥 Fetched task: {data['id']}")
+                return data
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    bt.logging.warning(f"⚠️ Failed to fetch task (attempt {attempt + 1}/{max_retries}): {e}")
+                    time.sleep(5)  # Wait longer before retry
+                else:
+                    bt.logging.warning(f"⚠️ Failed to fetch task after {max_retries} attempts: {e}")
+        return None
 
     def _run_mining_loop(self):
         """Main mining loop - fetch tasks, generate answers, submit to API."""

@@ -18,8 +18,8 @@ def get_metagraph():
     current_time = time.time()
     if _metagraph_cache is None or (current_time - _metagraph_cache_time) > METAGRAPH_CACHE_TTL:
         try:
-            # Use subtensor to get metagraph
-            subtensor = bt.subtensor(network="finney")
+            # Use Subtensor to get metagraph
+            subtensor = bt.Subtensor(network="finney")
             _metagraph_cache = subtensor.metagraph(SUBNET_NETUID)
             _metagraph_cache_time = current_time
         except Exception as e:
