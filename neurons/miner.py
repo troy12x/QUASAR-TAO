@@ -1,15 +1,18 @@
 # The MIT License (MIT)
-# Copyright © 2026 SILX INC
+# Copyright 2026 SILX INC
 
 import os
 import time
 import typing
+import requests
+import hashlib
 from typing import Optional, List, Any, Dict
 from pydantic import Field
 import torch
 import bittensor as bt
 import psutil
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # Add the parent directory to path so we can import quasar
 import sys
@@ -62,6 +65,9 @@ class Miner(BaseMinerNeuron):
         self.tokenizer = None
         self.max_length = None
         self.model_loaded = False
+        
+        # Validator API URL for submitting answers
+        self.validator_api_url = os.getenv("VALIDATOR_API_URL", "https://quasar-subnet.onrender.com")
 
     def load_model(self):
         """Load the model and tokenizer. Call this after starting the axon."""
@@ -96,11 +102,51 @@ class Miner(BaseMinerNeuron):
             self.model.eval()
             print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
+            bt.logging.info(f"Validator API URL: {self.validator_api_url}")
             self.model_loaded = True
         except Exception as e:
             bt.logging.error(f"Failed to load model {self.model_name}: {e}")
             bt.logging.warning("Please ensure you have access/internet or specify a valid model.")
             raise e
+
+    def _sign_message(self, message: str) -> str:
+        """Sign a message with the wallet's private key."""
+        private_key_bytes = bytes.fromhex(self.wallet.hotkey.private_key.hex())
+        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(private_key_bytes)
+        signature = private_key.sign(message.encode())
+        return signature.hex()
+
+    def _submit_answer_to_api(self, task_id: str, answer: str, miner_uid: int = 0) -> bool:
+        """Submit answer to validator_api."""
+        try:
+            payload = {
+                "task_id": task_id,
+                "answer": answer,
+                "miner_uid": miner_uid
+            }
+            
+            message = f"POST /receive_answers{str(payload)}"
+            headers = {
+                "X-Hotkey": self.wallet.hotkey.ss58_address,
+                "X-Signature": self._sign_message(message),
+                "X-Timestamp": str(int(time.time())),
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(
+                f"{self.validator_api_url}/receive_answers",
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            bt.logging.info(f"✅ Submitted answer to API: task_id={task_id}, status={result.get('status')}")
+            return True
+        except Exception as e:
+            bt.logging.warning(f"⚠️ Failed to submit answer to API: {e}")
+            return False
 
     async def forward(
         self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
@@ -211,6 +257,9 @@ Please show your reasoning and provide the answer in the required format."""}
             
             synapse.response = response
             synapse.processing_time = time.time() - start_time
+            
+            # Submit answer to validator_api
+            self._submit_answer_to_api(synapse.task_id, response, miner_uid=self.uid)
             
             # Precise memory cleanup
             del model_inputs, generated_ids
@@ -364,18 +413,13 @@ if __name__ == "__main__":
         miner_thread = threading.Thread(target=run_miner, daemon=False)
         miner_thread.start()
         
-        # Wait for axon to start serving
-        time.sleep(3)
-        
         # Load model in background while axon is serving
         print(" [MINER] Loading model in background (axon is serving)...")
         miner.load_model()
         
-        # Keep miner running indefinitely
+        # Wait for miner thread (runs indefinitely)
         try:
-            while True:
-                time.sleep(1)
+            miner_thread.join()
         except KeyboardInterrupt:
             print("\n [MINER] Shutting down...")
             miner.should_exit = True
-            miner_thread.join(timeout=5)
