@@ -71,12 +71,12 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/get_task", response_model=models.MinerTaskResponse)
-def get_task(db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
+def get_task(db: Session = Depends(get_db)):
     """
     Returns a random sample from docmath dataset.
     Returns task WITHOUT expected_output for miners.
     """
-    print(f"📥 [GET_TASK] Request from {hotkey[:8]}...")
+    print(f"📥 [GET_TASK] Request received")
     
     # Sample from docmath dataset
     samples = docmath_dataset.sample(n=1)
