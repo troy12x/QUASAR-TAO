@@ -68,18 +68,20 @@ struct Validator {
 
 impl Validator {
     async fn new(args: Args) -> Result<Self> {
+        let challenge_url = args.challenge_url.clone();
+        
         // Create HTTP client
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()?;
         
         info!("Validator initialized");
-        info!("Challenge URL: {}", args.challenge_url);
+        info!("Challenge URL: {}", challenge_url);
         
         Ok(Self {
             args,
             client,
-            challenge_url: args.challenge_url,
+            challenge_url,
         })
     }
 
