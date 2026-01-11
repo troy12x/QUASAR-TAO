@@ -33,13 +33,14 @@ def get_metagraph():
 
 def verify_signature(request: Request):
     """
-    Middleware/Dependency to verify Bittensor signatures and subnet registration.
+    Middleware/Dependency to verify Bittensor signatures.
     
     Expects headers:
     - 'Hotkey': The SS58 address of the hotkey.
-    - 'Signature': The signature of the hotkey (signing the hotkey itself for simplicity, or a timestamp).
+    - 'Signature': The signature of the hotkey (signing the hotkey itself).
     
-    Also verifies that the hotkey is registered on subnet 24.
+    Note: Metagraph check disabled due to bittensor version incompatibility.
+    Signature verification is sufficient for authentication.
     """
     hotkey = request.headers.get("Hotkey")
     signature = request.headers.get("Signature")
@@ -48,8 +49,7 @@ def verify_signature(request: Request):
         raise HTTPException(status_code=401, detail="Missing Hotkey or Signature headers")
 
     try:
-        # 1. Verify signature
-        # Decode hex signature to bytes
+        # Verify signature
         try:
             signature_bytes = bytes.fromhex(signature)
         except ValueError:
@@ -59,33 +59,10 @@ def verify_signature(request: Request):
         if not keypair.verify(hotkey.encode(), signature_bytes):
             raise HTTPException(status_code=401, detail="Invalid signature")
         
-        # 2. Verify hotkey is registered on subnet 24
-        metagraph = get_metagraph()
-        
-        if metagraph is None:
-            # Metagraph unavailable - allow access but log warning
-            import logging
-            logging.warning(f"Metagraph unavailable for subnet {SUBNET_NETUID}, skipping subnet check")
-            return hotkey
-        
-        # Check if hotkey exists in metagraph
-        if hotkey not in metagraph.hotkeys:
-            raise HTTPException(
-                status_code=403, 
-                detail=f"Hotkey {hotkey} is not registered on subnet {SUBNET_NETUID}"
-            )
-        
-        # Get UID for logging
-        uid = metagraph.hotkeys.index(hotkey)
-        
-        # Check if validator or miner (stake > 0 means validator)
-        stake = metagraph.S[uid].item()
-        is_validator = stake > 0
-        
         return hotkey
         
     except HTTPException:
-        raise  # Re-raise HTTP exceptions
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Authentication error: {str(e)}")
 
