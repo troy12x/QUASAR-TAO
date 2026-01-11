@@ -17,6 +17,7 @@
 
 import copy
 import typing
+import time
 
 import bittensor as bt
 
@@ -168,21 +169,34 @@ class BaseNeuron(ABC):
         # --- Check for registration.
         log_level = bt.logging.info if self.step % 100 == 0 else bt.logging.trace
         
+        # Rate limit: only check every 60 seconds
+        now = time.time()
+        last_check = getattr(self, "_last_reg_check", None)
+        if last_check is not None and now - last_check < 60:
+            return
+        
+        self._last_reg_check = now
+        
         log_level("🔍 Checking if hotkey is registered on network...")
         log_level(f"   Hotkey: {self.wallet.hotkey.ss58_address}")
         log_level(f"   Netuid: {self.config.netuid}")
         
-        if not self.subtensor.is_hotkey_registered(
-            netuid=self.config.netuid,
-            hotkey_ss58=self.wallet.hotkey.ss58_address,
-        ):
-            bt.logging.error(
-                f"❌ Wallet: {self.wallet} is not registered on netuid {self.config.netuid}."
-                f" Please register the hotkey using `btcli subnets register` before trying again"
+        try:
+            registered = self.subtensor.is_hotkey_registered(
+                netuid=self.config.netuid,
+                hotkey_ss58=self.wallet.hotkey.ss58_address,
             )
-            exit()
-        
-        bt.logging.info("✅ Hotkey is registered on network")
+            
+            if not registered:
+                bt.logging.warning(
+                    f"⚠️ Wallet: {self.wallet} is not registered on netuid {self.config.netuid}."
+                    f" Please register the hotkey using `btcli subnets register` before trying again"
+                )
+            else:
+                bt.logging.info("✅ Hotkey is registered on network")
+        except Exception as e:
+            bt.logging.warning(f"⚠️ Failed to check registration: {e}")
+            bt.logging.warning("Continuing anyway - registration will be checked on the blockchain")
 
     def should_sync_metagraph(self):
         """

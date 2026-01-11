@@ -115,6 +115,15 @@ class Miner(BaseMinerNeuron):
         signature = self.wallet.hotkey.sign(message.encode())
         return signature.hex()
 
+    def _get_auth_headers(self) -> dict:
+        """Get authentication headers for API requests."""
+        # Sign the hotkey address (as expected by validator_api)
+        signature = self._sign_message(self.wallet.hotkey.ss58_address)
+        return {
+            "Hotkey": self.wallet.hotkey.ss58_address,
+            "Signature": signature,
+        }
+
     def _submit_answer_to_api(self, task_id: str, answer: str, miner_uid: int = 0) -> bool:
         """Submit answer to validator_api."""
         try:
@@ -124,13 +133,8 @@ class Miner(BaseMinerNeuron):
                 "miner_uid": miner_uid
             }
             
-            message = f"POST /receive_answers{str(payload)}"
-            headers = {
-                "X-Hotkey": self.wallet.hotkey.ss58_address,
-                "X-Signature": self._sign_message(message),
-                "X-Timestamp": str(int(time.time())),
-                "Content-Type": "application/json"
-            }
+            headers = self._get_auth_headers()
+            headers["Content-Type"] = "application/json"
             
             response = requests.post(
                 f"{self.validator_api_url}/receive_answers",
@@ -150,11 +154,7 @@ class Miner(BaseMinerNeuron):
     def _fetch_task_from_api(self) -> Optional[dict]:
         """Fetch a task from validator_api."""
         try:
-            headers = {
-                "X-Hotkey": self.wallet.hotkey.ss58_address,
-                "X-Signature": self._sign_message("GET /get_task"),
-                "X-Timestamp": str(int(time.time())),
-            }
+            headers = self._get_auth_headers()
             
             response = requests.get(
                 f"{self.validator_api_url}/get_task",
