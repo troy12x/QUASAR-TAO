@@ -2,35 +2,6 @@ import bittensor as bt
 from fastapi import Request, HTTPException, Depends
 from typing import Optional
 
-# Subnet configuration
-SUBNET_NETUID = 24  # Quasar subnet
-
-# Cache for metagraph to avoid frequent API calls
-_metagraph_cache = None
-_metagraph_cache_time = 0
-METAGRAPH_CACHE_TTL = 300  # 5 minutes
-
-def get_metagraph():
-    """Get cached metagraph or fetch fresh one."""
-    global _metagraph_cache, _metagraph_cache_time
-    import time
-    
-    current_time = time.time()
-    if _metagraph_cache is None or (current_time - _metagraph_cache_time) > METAGRAPH_CACHE_TTL:
-        try:
-            # Use Subtensor to get metagraph
-            subtensor = bt.Subtensor(network="finney")
-            _metagraph_cache = subtensor.metagraph(SUBNET_NETUID)
-            _metagraph_cache_time = current_time
-        except Exception as e:
-            # If we can't fetch metagraph, log the error but don't crash
-            import logging
-            logging.error(f"Failed to fetch metagraph for subnet {SUBNET_NETUID}: {e}")
-            # Return None to indicate metagraph is unavailable
-            return None
-    
-    return _metagraph_cache
-
 def verify_signature(request: Request):
     """
     Middleware/Dependency to verify Bittensor signatures.
