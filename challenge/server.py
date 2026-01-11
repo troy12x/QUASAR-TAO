@@ -69,11 +69,11 @@ class EvaluationRequest(BaseModel):
 class EvaluationResponse(BaseModel):
     request_id: str
     success: bool
-    error: str = None
+    error: str | None = None
     score: float
     results: Dict[str, Any]
     execution_time_ms: int
-    cost: float = None
+    cost: float | None = None
 
 
 class HealthResponse(BaseModel):

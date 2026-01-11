@@ -6,7 +6,7 @@ version: '3.8'
 services:
   # Challenge Container
   challenge:
-    image: silxai/quasar-challenge:v7
+    image: silxai/quasar-challenge:v8
     container_name: quasar-challenge
     restart: unless-stopped
     
@@ -29,7 +29,7 @@ services:
 
   # Validator Node
   validator:
-    image: silxai/quasar-validator:v2
+    image: silxai/quasar-validator:v3
     container_name: quasar-validator
     restart: unless-stopped
     

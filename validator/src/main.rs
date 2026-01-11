@@ -206,6 +206,26 @@ async fn main() -> Result<()> {
         args.challenge_url = url;
     }
 
+    // Wait for challenge container to be ready
+    info!("Waiting for challenge container to be ready...");
+    let mut retries = 0;
+    loop {
+        match reqwest::get(&format!("{}/health", args.challenge_url)).await {
+            Ok(resp) if resp.status().is_success() => {
+                info!("Challenge container is ready!");
+                break;
+            }
+            _ => {
+                retries += 1;
+                if retries > 30 {
+                    return Err(anyhow::anyhow!("Challenge container not ready after 30 retries"));
+                }
+                info!("Challenge container not ready yet, retrying in 2 seconds... ({}/30)", retries);
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+        }
+    }
+
     // Create validator
     let validator = Validator::new(args).await?;
 
