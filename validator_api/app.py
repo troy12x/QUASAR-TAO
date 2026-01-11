@@ -8,6 +8,7 @@ import sys
 import os
 import random
 import time
+import hashlib
 
 # Add parent directory to path to import quasar
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -408,6 +409,60 @@ def get_miner_stats(hotkey: str, db: Session = Depends(get_db)):
         "average_score": float(avg_score),
         "ema_score": ema_score,
         "last_updated": datetime.utcnow()
+    }
+
+@app.post("/receive_answers")
+def receive_answers(
+    submission: models.MinerSubmission,
+    db: Session = Depends(get_db),
+    hotkey: str = Depends(auth.verify_signature)
+):
+    """
+    Miners submit their answers directly to this endpoint.
+    The API stores the answer for validators to score later.
+    Checks if miner is registered on the network.
+    """
+    print(f"📥 [RECEIVE_ANSWERS] Task: {submission.task_id} | Miner: {hotkey[:8]}...")
+
+    # 1. Verify task exists
+    db_task = db.query(models.Task).filter(models.Task.id == submission.task_id).first()
+    if not db_task:
+        print(f"❌ [RECEIVE_ANSWERS] Task {submission.task_id} not found")
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # 2. Check if miner already submitted for this task
+    existing = db.query(models.Result).filter(
+        models.Result.task_id == submission.task_id,
+        models.Result.miner_hotkey == hotkey
+    ).first()
+
+    if existing:
+        print(f"⚠️ [RECEIVE_ANSWERS] Miner {hotkey[:8]} already submitted for task {submission.task_id}")
+        return {"status": "already_submitted", "result_id": existing.id}
+
+    # 3. Calculate response hash
+    resp_text = submission.answer or ""
+    resp_hash = hashlib.sha256(resp_text.encode()).hexdigest()
+
+    # 4. Store the submission (score will be calculated by validator later)
+    db_result = models.Result(
+        task_id=submission.task_id,
+        miner_hotkey=hotkey,
+        miner_uid=submission.miner_uid,
+        response_hash=resp_hash,
+        response_text=resp_text,
+        score=None  # Will be scored by validator
+    )
+    db.add(db_result)
+    db.commit()
+    db.refresh(db_result)
+
+    print(f"✅ [RECEIVE_ANSWERS] Stored submission from {hotkey[:8]} for task {submission.task_id}")
+    return {
+        "status": "received",
+        "result_id": db_result.id,
+        "task_id": submission.task_id,
+        "miner_hotkey": hotkey
     }
 
 @app.get("/stats/global")

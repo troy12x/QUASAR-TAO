@@ -115,3 +115,8 @@ class LeagueInfoResponse(BaseModel):
     top_score: float
     top_hotkey: Optional[str]
     active_miners: int
+
+class MinerSubmission(BaseModel):
+    task_id: str
+    answer: str
+    miner_uid: int
