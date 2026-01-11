@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Challenge Container
   challenge:
-    image: silxai/quasar-challenge:latest
+    image: silxai/quasar-challenge:v2
     container_name: quasar-challenge
     restart: unless-stopped
     

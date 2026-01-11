@@ -199,7 +199,12 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     // Parse arguments
-    let args = Args::parse();
+    let mut args = Args::parse();
+    
+    // Override challenge_url from environment variable if set
+    if let Ok(url) = std::env::var("CHALLENGE_URL") {
+        args.challenge_url = url;
+    }
 
     // Create validator
     let validator = Validator::new(args).await?;
