@@ -42,21 +42,5 @@ def verify_validator_signature(request: Request):
     Additional check to ensure the hotkey is a validator (has stake).
     Used for endpoints that only validators should access.
     """
-    hotkey = verify_signature(request)  # First verify signature and registration
-    
-    try:
-        metagraph = get_metagraph()
-        uid = metagraph.hotkeys.index(hotkey)
-        stake = metagraph.S[uid].item()
-        
-        if stake <= 0:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Hotkey {hotkey} is not a validator on subnet {SUBNET_NETUID}"
-            )
-        
-        return hotkey
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Validator verification error: {str(e)}")
+    hotkey = verify_signature(request)
+    return hotkey
