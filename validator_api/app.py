@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+ from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 from typing import List, Optional, Dict
 import uuid
@@ -86,7 +87,8 @@ def get_task(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to sample from dataset")
     
     sample = samples[0]
-    task_id = f"docmath_{sample.sample_id}"
+    # Ensure uniqueness even when the same sample is returned multiple times.
+    task_id = f"docmath_{sample.sample_id}_{uuid.uuid4().hex}"
     
     print(f"📤 [GET_TASK] Generated task: {task_id}")
     
@@ -102,9 +104,13 @@ def get_task(db: Session = Depends(get_db)):
         difficulty_level="medium",
         evaluation_metrics="accuracy"
     )
-    db.add(db_task)
-    db.commit()
-    db.refresh(db_task)
+    try:
+        db.add(db_task)
+        db.commit()
+        db.refresh(db_task)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Database error: failed to persist task")
     
     # Return WITHOUT expected_output for miners
     return models.MinerTaskResponse(
