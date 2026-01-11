@@ -12,6 +12,7 @@ COPY validator_api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy challenge code
+COPY challenge/ ./challenge/
 COPY quasar/ ./quasar/
 COPY validator_api/ ./validator_api/
 
