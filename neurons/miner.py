@@ -111,9 +111,8 @@ class Miner(BaseMinerNeuron):
 
     def _sign_message(self, message: str) -> str:
         """Sign a message with the wallet's private key."""
-        private_key_bytes = bytes.fromhex(self.wallet.hotkey.private_key.hex())
-        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(private_key_bytes)
-        signature = private_key.sign(message.encode())
+        # Bittensor Keypair uses .sign() directly
+        signature = self.wallet.hotkey.sign(message.encode())
         return signature.hex()
 
     def _submit_answer_to_api(self, task_id: str, answer: str, miner_uid: int = 0) -> bool:
@@ -148,48 +147,48 @@ class Miner(BaseMinerNeuron):
             bt.logging.warning(f"⚠️ Failed to submit answer to API: {e}")
             return False
 
-    async def forward(
-        self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
-    ) -> quasar.protocol.BenchmarkEvaluationSynapse:
-        """
-        Processes the incoming synapse by generating a response to the prompt.
-        """
-        # Wait for model to be loaded
-        max_wait = 300  # 5 minutes max wait
-        waited = 0
-        while not self.model_loaded and waited < max_wait:
-            time.sleep(1)
-            waited += 1
-        
-        if not self.model_loaded:
-            synapse.response = "Error: Model not loaded yet. Please try again."
-            synapse.processing_time = 0.0
-            return synapse
-        
-        start_time = time.time()
-        
+    def _fetch_task_from_api(self) -> Optional[dict]:
+        """Fetch a task from validator_api."""
         try:
-            # Get context and prompt from synapse
-            context = getattr(synapse, 'context', '') or ''
-            prompt = getattr(synapse, 'prompt', '') or ''
+            headers = {
+                "X-Hotkey": self.wallet.hotkey.ss58_address,
+                "X-Signature": self._sign_message("GET /get_task"),
+                "X-Timestamp": str(int(time.time())),
+            }
             
-            # If context/prompt missing, return error
-            if not context or not prompt:
-                synapse.response = "Error: Missing context or prompt in synapse."
-                synapse.processing_time = time.time() - start_time
-                return synapse
-            
-            print(f"\n[MINER] 📝 Received Task: {synapse.task_id}")
-            print(f"[MINER] Prompt: {prompt}")
-            print(f"[MINER] Context Length: {len(context)} characters")
-            bt.logging.info(f"📨 Received request. Context len: {len(context)} chars")
+            response = requests.get(
+                f"{self.validator_api_url}/get_task",
+                headers=headers,
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            bt.logging.info(f"📥 Fetched task: {data['id']}")
+            return data
+        except Exception as e:
+            bt.logging.warning(f"⚠️ Failed to fetch task: {e}")
+            return None
 
-            # formatting input for Qwen
-            # Qwen instruct format usually:  system... user...
-            # We can use apply_chat_template if available, or raw concatenation.
+    def _run_mining_loop(self):
+        """Main mining loop - fetch tasks, generate answers, submit to API."""
+        while not self.should_exit:
+            # Fetch task from API
+            task = self._fetch_task_from_api()
+            if not task:
+                time.sleep(60)  # Wait before retry
+                continue
             
-            messages = [
-                {"role": "system", "content": """You are a financial document analysis assistant.
+            # Generate answer
+            bt.logging.info(f"� Generating answer for task {task['id']}...")
+            start_time = time.time()
+            
+            try:
+                # Prepare input
+                context = task.get('context', '')
+                prompt = task.get('prompt', '')
+                
+                messages = [
+                    {"role": "system", "content": """You are a financial document analysis assistant.
 
 TASK:
 Read the provided financial document text and answer the question accurately.
@@ -203,80 +202,67 @@ OUTPUT FORMAT:
 You MUST format your final answer as: "Therefore, the answer is (insert answer here)."
 Example: "Therefore, the answer is $100,000."
 The formatted answer MUST be the final sentence of your response."""},
-                {"role": "user", "content": f"""Context:
+                    {"role": "user", "content": f"""Context:
 {context}
 
 Question: {prompt}
 
 Please show your reasoning and provide the answer in the required format."""}
-            ]
-            
-            text_input = self.tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-            
-            self._log_memory_usage("Before Tokenization")
-            
-            model_inputs = self.tokenizer(
-                [text_input], 
-                return_tensors="pt",
-                truncation=True,
-                max_length=self.max_length
-            ).to(self.device)
-            
-            self._log_memory_usage("After Tokenization / Before Generate")
-            
-            # Generate
-            with torch.no_grad():
-                generated_ids = self.model.generate(
-                    model_inputs.input_ids,
-                    attention_mask=model_inputs.attention_mask,
-                    max_new_tokens=512, # High capacity yet stable for 128k context
-                    do_sample=True,
-                    temperature=0.1,
-                    top_p=0.9,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-            
-            generated_ids = [
-                output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-            ]
-            response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-            
-            # print(f"[MINER]  Generated Response: {response}")  # Commented to reduce log spam
-            bt.logging.info(f" [MINER] Generated response length: {len(response)} chars")
-            
-            # Store task for cleanup later
-            self.active_tasks[synapse.task_id] = {
-                "start_time": time.time(),
-                "context": context,
-                "prompt": prompt
-            }
-            
-            synapse.response = response
-            synapse.processing_time = time.time() - start_time
-            
-            # Submit answer to validator_api
-            self._submit_answer_to_api(synapse.task_id, response, miner_uid=self.uid)
-            
-            # Precise memory cleanup
-            del model_inputs, generated_ids
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            # Fill other metadata if required by protocol
-            if hasattr(synapse, 'quasar_model_architecture'):
-                synapse.quasar_model_architecture = self.model_name
-            if hasattr(synapse, 'quasar_model_configuration'):
-                synapse.quasar_model_configuration = {"max_length": self.max_length}
+                ]
                 
-        except Exception as e:
-            bt.logging.error(f"❌ Error during generation: {e}")
-            synapse.response = f"Error: {str(e)}"
-            synapse.processing_time = time.time() - start_time
+                text_input = self.tokenizer.apply_chat_template(
+                    messages, 
+                    tokenize=False, 
+                    add_generation_prompt=True
+                )
+                
+                model_inputs = self.tokenizer(
+                    [text_input], 
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=self.max_length
+                ).to(self.device)
+                
+                # Generate
+                with torch.no_grad():
+                    generated_ids = self.model.generate(
+                        model_inputs.input_ids,
+                        attention_mask=model_inputs.attention_mask,
+                        max_new_tokens=512,
+                        do_sample=True,
+                        temperature=0.1,
+                        top_p=0.9,
+                        pad_token_id=self.tokenizer.eos_token_id
+                    )
+                
+                generated_ids = [
+                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+                ]
+                response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                
+                elapsed = time.time() - start_time
+                bt.logging.info(f"✅ Generated answer in {elapsed:.2f}s (length: {len(response)} chars)")
+                
+                # Submit to API
+                self._submit_answer_to_api(task['id'], response, miner_uid=self.uid)
+                
+                # Cleanup
+                del model_inputs, generated_ids
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+            except Exception as e:
+                bt.logging.error(f"❌ Error processing task: {e}")
+            
+            # Wait before next task
+            time.sleep(60)
 
+    async def forward(
+        self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
+    ) -> quasar.protocol.BenchmarkEvaluationSynapse:
+        """Not used - miner uses API polling instead."""
+        synapse.response = "Miner uses API polling. Please use validator_api."
+        synapse.processing_time = 0.0
         return synapse
 
     async def blacklist(
@@ -406,20 +392,16 @@ if __name__ == "__main__":
     # Note: Bittensor's config system will automatically parse --miner.model_name
     # and --miner.league from command line arguments
     with Miner() as miner:
-        # Start the miner's axon in a separate thread
-        def run_miner():
-            miner.run()
-        
-        miner_thread = threading.Thread(target=run_miner, daemon=False)
-        miner_thread.start()
-        
-        # Load model in background while axon is serving
-        print(" [MINER] Loading model in background (axon is serving)...")
+        # Load model
+        print(" [MINER] Loading model...")
         miner.load_model()
         
-        # Wait for miner thread (runs indefinitely)
+        # Start mining loop (polls API for tasks)
+        print(" [MINER] Starting mining loop (polling validator API)...")
+        print(" [MINER] Press Ctrl+C to stop\n")
+        
         try:
-            miner_thread.join()
+            miner._run_mining_loop()
         except KeyboardInterrupt:
             print("\n [MINER] Shutting down...")
             miner.should_exit = True
