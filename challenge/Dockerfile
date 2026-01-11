@@ -12,6 +12,7 @@ COPY validator_api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy challenge code
+COPY quasar/ ./quasar/
 COPY validator_api/ ./validator_api/
 
 # Create data directory for docmath dataset
