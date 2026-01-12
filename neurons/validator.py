@@ -121,23 +121,41 @@ class Validator(BaseValidatorNeuron):
         """Main validation loop - call challenge container to evaluate miners."""
         print("[VALIDATOR] ➡️ Starting validation cycle...", flush=True)
         bt.logging.info("➡️ Starting validation cycle...")
-        
+
         try:
+            # Fetch scores from API first
+            print("[VALIDATOR] Fetching scores from API...", flush=True)
+            api_scores = self.fetch_api_scores()
+
             # Get serving miners
             print("[VALIDATOR] Scanning metagraph for serving miners...", flush=True)
-            miner_uids = [
+            all_miner_uids = [
                 uid for uid in range(self.metagraph.n)
                 if self.metagraph.axons[uid].is_serving and uid != self.uid
             ]
-            
-            if not miner_uids:
+
+            if not all_miner_uids:
                 print("[VALIDATOR] ⚠️ No serving miners found, skipping round", flush=True)
                 bt.logging.warning("No serving miners found, skipping round")
                 return
-            
-            print(f"[VALIDATOR] 🎯 Found {len(miner_uids)} serving miners: {miner_uids}", flush=True)
-            bt.logging.info(f"🎯 Found {len(miner_uids)} serving miners")
-            
+
+            print(f"[VALIDATOR] 🎯 Found {len(all_miner_uids)} serving miners in metagraph", flush=True)
+
+            # Filter to only miners that have submitted to the API
+            miner_uids = []
+            for uid in all_miner_uids:
+                hotkey = self.metagraph.hotkeys[uid]
+                if hotkey in api_scores:
+                    miner_uids.append(uid)
+
+            if not miner_uids:
+                print("[VALIDATOR] ⚠️ No miners have submitted to API yet, skipping round", flush=True)
+                bt.logging.warning("No miners have submitted to API yet, skipping round")
+                return
+
+            print(f"[VALIDATOR] 🎯 Evaluating {len(miner_uids)} miners with API submissions: {miner_uids}", flush=True)
+            bt.logging.info(f"🎯 Evaluating {len(miner_uids)} miners with API submissions")
+
             # Evaluate each miner by calling challenge container
             rewards = []
             for i, uid in enumerate(miner_uids):
@@ -145,22 +163,22 @@ class Validator(BaseValidatorNeuron):
                 print(f"[VALIDATOR] Evaluating miner uid={uid} hotkey={miner_hotkey[:12]}...", flush=True)
                 score = await self.evaluate_miner(uid, miner_hotkey)
                 rewards.append(score)
-                
+
                 # Update local scores
                 self.scores[uid] = score
-                
+
                 print(f"[VALIDATOR]   Miner {uid} ({miner_hotkey[:8]}...): score={score:.4f}", flush=True)
                 bt.logging.info(f"  Miner {uid} ({miner_hotkey[:8]}...): score={score:.4f}")
-                
+
                 # Delay between evaluations (except for last miner)
                 if i < len(miner_uids) - 1:
                     time.sleep(EVALUATION_DELAY)
-            
+
             # Log summary
             avg_score = sum(rewards) / len(rewards) if rewards else 0.0
             print(f"[VALIDATOR] ✅ Evaluation complete: avg_score={avg_score:.4f}", flush=True)
             bt.logging.success(f"✅ Evaluation complete: avg_score={avg_score:.4f}")
-            
+
             # Submit weights to Bittensor
             print(f"[VALIDATOR] Submitting weights for {len(miner_uids)} miners...", flush=True)
             await self.submit_weights(miner_uids)

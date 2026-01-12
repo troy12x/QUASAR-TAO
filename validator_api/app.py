@@ -10,6 +10,7 @@ import os
 import random
 import time
 import hashlib
+import requests
 
 # Add parent directory to path to import quasar
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +22,6 @@ from . import models
 from . import auth
 from . import scoring
 from . import longcode_loader
-from . import sandbox_executor
 from .database import engine, get_db
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,14 +39,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Configuration
+CHALLENGE_URL = os.getenv("CHALLENGE_URL", "http://localhost:8080")
+
 # Initialize datasets
 print("🔄 Initializing datasets in API...")
 longcode_dataset = longcode_loader.LongcodeDataset()
 print(f"✅ LongcodeDataset ready with {len(longcode_dataset)} samples.")
 
-# Initialize sandbox executor
-sandbox_evaluator = sandbox_executor.LongcodeEvaluator(timeout_sec=60)
-print(f"✅ SandboxExecutor ready.")
+print(f"✅ Challenge container URL: {CHALLENGE_URL}")
+print(f"   (Code execution will be handled by challenge container)")
 
 # League configuration
 LEAGUES = ["100k", "200k", "300k", "400k", "500k", "600k", "700k", "800k", "900k", "1M"]
@@ -526,16 +528,109 @@ def submit_longcode(
         print(f"❌ [SUBMIT_LONGCODE] No test cases found for task {task_id}")
         raise HTTPException(status_code=500, detail="No test cases for this task")
     
-    # 4. Execute code against test cases
+    # 4. Execute code against test cases using challenge container
     print(f"🔬 [SUBMIT_LONGCODE] Executing code against {len(test_cases)} test cases...")
-    
-    test_inputs = [(tc.get("input_code", ""), tc.get("expected_output")) for tc in test_cases]
-    
-    evaluation_result = sandbox_evaluator.evaluate_submission(
-        miner_code=code,
-        function_name=function_name,
-        test_cases=test_inputs
-    )
+    print(f"   Using challenge container: {CHALLENGE_URL}")
+
+    passed = 0
+    failed = 0
+    timeouts = 0
+    test_results = []
+
+    for i, test_case in enumerate(test_cases):
+        test_input = test_case.get("input_code", "")
+        expected_output = test_case.get("expected_output")
+
+        print(f"   Test {i+1}/{len(test_cases)}: input={test_input[:50]}...", flush=True)
+
+        try:
+            # Call challenge container to execute code
+            response = requests.post(
+                f"{CHALLENGE_URL}/execute",
+                json={
+                    "code": code,
+                    "function_name": function_name,
+                    "test_input": test_input
+                },
+                timeout=EXECUTION_TIMEOUT + 5
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            if result.get("timeout"):
+                print(f"      ⏱️  Timeout", flush=True)
+                timeouts += 1
+                test_results.append({
+                    "test_case": i,
+                    "status": "timeout",
+                    "expected": expected_output,
+                    "actual": None,
+                    "error": result.get("error")
+                })
+            elif not result.get("success"):
+                print(f"      ❌ Error: {result.get('error')[:50]}", flush=True)
+                failed += 1
+                test_results.append({
+                    "test_case": i,
+                    "status": "error",
+                    "expected": expected_output,
+                    "actual": None,
+                    "error": result.get("error")
+                })
+            else:
+                actual_output = result.get("output")
+                # Compare with expected output
+                if str(actual_output) == str(expected_output):
+                    print(f"      ✅ Pass", flush=True)
+                    passed += 1
+                    test_results.append({
+                        "test_case": i,
+                        "status": "passed",
+                        "expected": expected_output,
+                        "actual": actual_output
+                    })
+                else:
+                    print(f"      ❌ Fail: expected {expected_output}, got {actual_output}", flush=True)
+                    failed += 1
+                    test_results.append({
+                        "test_case": i,
+                        "status": "failed",
+                        "expected": expected_output,
+                        "actual": actual_output
+                    })
+
+        except requests.exceptions.Timeout:
+            print(f"      ⏱️  Request timeout", flush=True)
+            timeouts += 1
+            test_results.append({
+                "test_case": i,
+                "status": "timeout",
+                "expected": expected_output,
+                "actual": None,
+                "error": "Request timeout"
+            })
+        except Exception as e:
+            print(f"      ❌ Exception: {str(e)[:50]}", flush=True)
+            failed += 1
+            test_results.append({
+                "test_case": i,
+                "status": "error",
+                "expected": expected_output,
+                "actual": None,
+                "error": str(e)
+            })
+
+    total_tests = len(test_cases)
+    score = passed / total_tests if total_tests > 0 else 0.0
+
+    evaluation_result = {
+        "total_tests": total_tests,
+        "passed": passed,
+        "failed": failed,
+        "timeouts": timeouts,
+        "score": score,
+        "results": test_results
+    }
     
     print(f"📊 [SUBMIT_LONGCODE] Evaluation complete:")
     print(f"   Total: {evaluation_result['total_tests']}")

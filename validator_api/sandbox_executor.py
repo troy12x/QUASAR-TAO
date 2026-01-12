@@ -52,23 +52,33 @@ class SandboxExecutor:
     ) -> ExecutionResult:
         """
         Execute a function with test input
-        
+
         Args:
             function_code: Complete code containing the function
             function_name: Name of the function to execute
             test_input: Input to pass to the function
-        
+
         Returns:
             ExecutionResult with output or error
         """
+        print(f"[SANDBOX] ========================================", flush=True)
+        print(f"[SANDBOX] Executing function: {function_name}", flush=True)
+        print(f"[SANDBOX] Test input: {test_input}", flush=True)
+        print(f"[SANDBOX] Code preview (first 200 chars): {function_code[:200]}...", flush=True)
+        print(f"[SANDBOX] ========================================", flush=True)
+
         start_time = datetime.now()
-        
+
         try:
             # Parse and validate the code
+            print(f"[SANDBOX] Parsing code...", flush=True)
             tree = ast.parse(function_code)
-            
+            print(f"[SANDBOX] ✅ Code parsed successfully", flush=True)
+
             # Check for dangerous operations
+            print(f"[SANDBOX] Validating code for dangerous operations...", flush=True)
             self._validate_code(tree)
+            print(f"[SANDBOX] ✅ Code validation passed", flush=True)
             
             # Create execution namespace
             namespace: Dict[str, Any] = {}
@@ -81,26 +91,33 @@ class SandboxExecutor:
                     pass
             
             # Execute the function definition
+            print(f"[SANDBOX] Executing function definition...", flush=True)
             with self._capture_output():
                 exec(function_code, namespace)
-            
+            print(f"[SANDBOX] ✅ Function definition executed", flush=True)
+
             # Check if function exists
             if function_name not in namespace:
+                print(f"[SANDBOX] ❌ Function '{function_name}' not found in code", flush=True)
                 return ExecutionResult(
                     success=False,
                     output=None,
                     error=f"Function '{function_name}' not found in submitted code"
                 )
-            
+
             # Get the function
             func = namespace[function_name]
-            
+            print(f"[SANDBOX] ✅ Found function '{function_name}' in namespace", flush=True)
+
             # Execute with timeout
+            print(f"[SANDBOX] Executing function with test input...", flush=True)
             result = self._execute_with_timeout(func, test_input)
-            
+
             execution_time = (datetime.now() - start_time).total_seconds() * 1000
-            
+            print(f"[SANDBOX] Execution time: {execution_time:.2f}ms", flush=True)
+
             if result.timeout:
+                print(f"[SANDBOX] ❌ Execution timeout after {self.timeout_sec}s", flush=True)
                 return ExecutionResult(
                     success=False,
                     output=None,
@@ -108,15 +125,19 @@ class SandboxExecutor:
                     execution_time_ms=execution_time,
                     timeout=True
                 )
-            
+
             if result.error:
+                print(f"[SANDBOX] ❌ Execution error: {result.error}", flush=True)
                 return ExecutionResult(
                     success=False,
                     output=None,
                     error=result.error,
                     execution_time_ms=execution_time
                 )
-            
+
+            print(f"[SANDBOX] ✅ Execution successful", flush=True)
+            print(f"[SANDBOX] Output: {result.output}", flush=True)
+            print(f"[SANDBOX] ========================================", flush=True)
             return ExecutionResult(
                 success=True,
                 output=result.output,
