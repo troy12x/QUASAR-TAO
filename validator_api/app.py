@@ -21,7 +21,9 @@ from . import models
 from . import auth
 from . import scoring
 from . import docmath_loader
+from . import longcode_loader
 from . import answer_extractor
+from . import sandbox_executor
 from .database import engine, get_db
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,10 +41,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize DocmathDataset
-print("🔄 Initializing DocmathDataset in API...")
+# Initialize datasets
+print("🔄 Initializing datasets in API...")
 docmath_dataset = docmath_loader.DocmathDataset()
 print(f"✅ DocmathDataset ready with {len(docmath_dataset)} samples.")
+
+longcode_dataset = longcode_loader.LongcodeDataset()
+print(f"✅ LongcodeDataset ready with {len(longcode_dataset)} samples.")
+
+# Initialize sandbox executor
+sandbox_evaluator = sandbox_executor.LongcodeEvaluator(timeout_sec=60)
+print(f"✅ SandboxExecutor ready.")
 
 # League configuration
 LEAGUES = ["100k", "200k", "300k", "400k", "500k", "600k", "700k", "800k", "900k", "1M"]
@@ -490,7 +499,165 @@ def get_global_stats(db: Session = Depends(get_db)):
         "total_submissions": total_submissions,
         "accepted": accepted,
         "rejected": rejected,
-        "approval_rate": (accepted / total_submissions * 100) if total_submissions > 0 else 0.0,
-        "average_score": float(avg_score),
-        "last_updated": datetime.utcnow()
+        "avg_score": avg_score
+    }
+
+# ============================================================================
+# Longcode Benchmark Endpoints (Code Submission Model)
+# ============================================================================
+
+@app.get("/get_longcode_task", response_model=models.MinerTaskResponse)
+def get_longcode_task(db: Session = Depends(get_db)):
+    """
+    Returns a random sample from longcode dataset.
+    Returns task WITHOUT expected_output for miners.
+    Includes template_code that miners need to complete.
+    """
+    print(f"📥 [GET_LONGCODE_TASK] Request received")
+    
+    # Sample from longcode dataset
+    samples = longcode_dataset.sample(n=1)
+    
+    if not samples:
+        print("❌ [GET_LONGCODE_TASK] Failed to sample from dataset!")
+        raise HTTPException(status_code=500, detail="Failed to sample from dataset")
+    
+    sample = samples[0]
+    task_id = f"longcode_{sample.sample_id}_{uuid.uuid4().hex}"
+    
+    print(f"📤 [GET_LONGCODE_TASK] Generated task: {task_id}")
+    
+    # Store in DB with template_code
+    db_task = models.Task(
+        id=task_id,
+        dataset_name="longcode",
+        task_type="code_injection",
+        context=sample.get_prompt_text(),
+        prompt=sample.get_prompt_text(),
+        expected_output=sample.test_cases,  # Store test cases
+        context_length=len(sample.get_prompt_text()),
+        difficulty_level=sample.context_length,
+        evaluation_metrics="code_execution",
+        extra_data={
+            "template_code": sample.get_template_code(),
+            "timeout": sample.timeout
+        }
+    )
+    try:
+        db.add(db_task)
+        db.commit()
+        db.refresh(db_task)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Database error: failed to persist task")
+    
+    # Return with template_code for miners
+    response = models.MinerTaskResponse(
+        id=db_task.id,
+        dataset_name=db_task.dataset_name,
+        task_type=db_task.task_type,
+        context=db_task.context,
+        prompt=db_task.prompt,
+        context_length=db_task.context_length,
+        difficulty_level=db_task.difficulty_level,
+        evaluation_metrics=["code_execution"],
+        created_at=db_task.created_at
+    )
+    
+    # Add template_code to response
+    response_dict = response.dict()
+    response_dict["template_code"] = sample.get_template_code()
+    response_dict["timeout"] = sample.timeout
+    
+    return response_dict
+
+@app.post("/submit_longcode")
+def submit_longcode(
+    submission: dict,
+    db: Session = Depends(get_db),
+    hotkey: str = Depends(auth.verify_signature)
+):
+    """
+    Miners submit their completed code for a longcode task.
+    The API executes the code against test cases and scores it.
+    """
+    task_id = submission.get("task_id")
+    code = submission.get("code")
+    function_name = submission.get("function_name", "solve")
+    
+    print(f"📥 [SUBMIT_LONGCODE] Task: {task_id} | Miner: {hotkey[:8]}")
+    print(f"   Function: {function_name}")
+    print(f"   Code length: {len(code) if code else 0} chars")
+    
+    # 1. Fetch Task details
+    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not db_task:
+        print(f"❌ [SUBMIT_LONGCODE] Task {task_id} not found in DB")
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    if db_task.dataset_name != "longcode":
+        raise HTTPException(status_code=400, detail="Not a longcode task")
+    
+    # 2. Check for duplicate submission
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    existing_result = db.query(models.Result).filter(
+        models.Result.task_id == task_id,
+        models.Result.miner_hotkey == hotkey
+    ).first()
+    
+    if existing_result:
+        print(f"⚠️ [SUBMIT_LONGCODE] Miner {hotkey[:8]} already submitted for task {task_id}")
+        return {
+            "status": "already_submitted",
+            "result_id": existing_result.id,
+            "score": existing_result.score
+        }
+    
+    # 3. Get test cases from task
+    test_cases = db_task.expected_output  # This contains test cases for longcode
+    
+    if not test_cases or not isinstance(test_cases, list):
+        print(f"❌ [SUBMIT_LONGCODE] No test cases found for task {task_id}")
+        raise HTTPException(status_code=500, detail="No test cases for this task")
+    
+    # 4. Execute code against test cases
+    print(f"🔬 [SUBMIT_LONGCODE] Executing code against {len(test_cases)} test cases...")
+    
+    test_inputs = [(tc.get("input_code", ""), tc.get("expected_output")) for tc in test_cases]
+    
+    evaluation_result = sandbox_evaluator.evaluate_submission(
+        miner_code=code,
+        function_name=function_name,
+        test_cases=test_inputs
+    )
+    
+    print(f"📊 [SUBMIT_LONGCODE] Evaluation complete:")
+    print(f"   Total: {evaluation_result['total_tests']}")
+    print(f"   Passed: {evaluation_result['passed']}")
+    print(f"   Failed: {evaluation_result['failed']}")
+    print(f"   Timeouts: {evaluation_result['timeouts']}")
+    print(f"   Score: {evaluation_result['score']:.4f}")
+    
+    # 5. Store result
+    db_result = models.Result(
+        task_id=task_id,
+        miner_hotkey=hotkey,
+        miner_uid=submission.get("miner_uid", 0),
+        response_hash=code_hash,
+        response_text=code,
+        score=evaluation_result["score"]
+    )
+    db.add(db_result)
+    db.commit()
+    db.refresh(db_result)
+    
+    return {
+        "status": "evaluated",
+        "result_id": db_result.id,
+        "score": evaluation_result["score"],
+        "total_tests": evaluation_result["total_tests"],
+        "passed": evaluation_result["passed"],
+        "failed": evaluation_result["failed"],
+        "timeouts": evaluation_result["timeouts"],
+        "test_results": evaluation_result["results"]
     }

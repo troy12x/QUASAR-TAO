@@ -68,6 +68,54 @@ class Miner(BaseMinerNeuron):
         
         # Validator API URL for submitting answers
         self.validator_api_url = os.getenv("VALIDATOR_API_URL", "https://quasar-subnet.onrender.com")
+        try:
+            self.api_timeout = float(os.getenv("VALIDATOR_API_TIMEOUT", "30"))
+        except Exception:
+            self.api_timeout = 30.0
+        self.api_debug = os.getenv("MINER_API_DEBUG", "0").strip() == "1"
+        self.api_warmup = os.getenv("MINER_API_WARMUP", "1").strip() == "1"
+        try:
+            self.poll_interval = float(os.getenv("MINER_POLL_INTERVAL", "60"))
+        except Exception:
+            self.poll_interval = 60.0
+        
+    def _log_api_debug(self, message: str) -> None:
+        if self.api_debug:
+            msg = f"[API_DEBUG] {message}"
+            bt.logging.info(msg)
+            print(msg, flush=True)
+
+    def _api_request(self, method: str, path: str, *, headers: Optional[dict] = None, json: Optional[dict] = None) -> requests.Response:
+        url = f"{self.validator_api_url}{path}"
+        t0 = time.perf_counter()
+        self._log_api_debug(f"{method} {url} timeout={self.api_timeout}s")
+        try:
+            resp = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json,
+                timeout=self.api_timeout,
+            )
+            dt = time.perf_counter() - t0
+            self._log_api_debug(
+                f"{method} {path} -> {resp.status_code} elapsed={dt:.3f}s bytes={len(resp.content) if resp.content is not None else 'n/a'}"
+            )
+            return resp
+        except Exception as e:
+            dt = time.perf_counter() - t0
+            self._log_api_debug(f"{method} {path} -> EXCEPTION elapsed={dt:.3f}s type={type(e).__name__} msg={e}")
+            raise
+
+    def _warmup_validator_api(self) -> None:
+        if not self.api_warmup:
+            return
+        try:
+            resp = self._api_request("GET", "/health")
+            if self.api_debug:
+                self._log_api_debug(f"/health ok={resp.ok}")
+        except Exception:
+            return
 
     def load_model(self):
         """Load the model and tokenizer. Call this after starting the axon."""
@@ -125,7 +173,7 @@ class Miner(BaseMinerNeuron):
         }
 
     def _submit_answer_to_api(self, task_id: str, answer: str, miner_uid: int = 0) -> bool:
-        """Submit answer to validator_api."""
+        """Submit answer to validator_api (for docmath tasks)."""
         try:
             payload = {
                 "task_id": task_id,
@@ -136,56 +184,93 @@ class Miner(BaseMinerNeuron):
             headers = self._get_auth_headers()
             headers["Content-Type"] = "application/json"
             
-            response = requests.post(
-                f"{self.validator_api_url}/receive_answers",
-                json=payload,
-                headers=headers,
-                timeout=30
-            )
+            response = self._api_request("POST", "/receive_answers", headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
             
             bt.logging.info(f"✅ Submitted answer to API: task_id={task_id}, status={result.get('status')}")
+            print(f"[MINER] Submitted answer to API: task_id={task_id}, status={result.get('status')}", flush=True)
             return True
         except Exception as e:
             bt.logging.warning(f"⚠️ Failed to submit answer to API: {e}")
+            print(f"[MINER] Submit answer failed: {e}", flush=True)
             return False
 
-    def _fetch_task_from_api(self) -> Optional[dict]:
-        """Fetch a task from validator_api."""
+    def _submit_longcode_to_api(self, task_id: str, code: str, function_name: str = "solve", miner_uid: int = 0) -> bool:
+        """Submit code to validator_api (for longcode tasks)."""
+        try:
+            payload = {
+                "task_id": task_id,
+                "code": code,
+                "function_name": function_name,
+                "miner_uid": miner_uid
+            }
+            
+            headers = self._get_auth_headers()
+            headers["Content-Type"] = "application/json"
+            
+            response = self._api_request("POST", "/submit_longcode", headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            
+            bt.logging.info(f"✅ Submitted longcode to API: task_id={task_id}, status={result.get('status')}, score={result.get('score', 0):.4f}")
+            print(f"[MINER] Submitted longcode to API: task_id={task_id}, status={result.get('status')}, score={result.get('score', 0):.4f}", flush=True)
+            return True
+        except Exception as e:
+            bt.logging.warning(f"⚠️ Failed to submit longcode to API: {e}")
+            print(f"[MINER] Submit longcode failed: {e}", flush=True)
+            return False
+
+    def _fetch_task_from_api(self):
+        """Fetch a task from validator_api (longcode or docmath)."""
         max_retries = 5
         for attempt in range(max_retries):
             try:
                 headers = self._get_auth_headers()
                 
-                response = requests.get(
-                    f"{self.validator_api_url}/get_task",
-                    headers=headers,
-                    timeout=30
-                )
+                # Try longcode task first
+                response = self._api_request("GET", "/get_longcode_task", headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    bt.logging.info(f"📥 Fetched longcode task: {data['id']}")
+                    print(f"[MINER] Fetched longcode task: {data['id']}", flush=True)
+                    return data
+                
+                # Fallback to docmath task
+                response = self._api_request("GET", "/get_task", headers=headers)
                 response.raise_for_status()
                 data = response.json()
-                bt.logging.info(f"📥 Fetched task: {data['id']}")
+                bt.logging.info(f"📥 Fetched docmath task: {data['id']}")
+                print(f"[MINER] Fetched docmath task: {data['id']}", flush=True)
                 return data
             except Exception as e:
                 if attempt < max_retries - 1:
                     bt.logging.warning(f"⚠️ Failed to fetch task (attempt {attempt + 1}/{max_retries}): {e}")
+                    print(f"[MINER] Fetch task failed (attempt {attempt + 1}/{max_retries}): {e}", flush=True)
                     time.sleep(5)  # Wait longer before retry
                 else:
                     bt.logging.warning(f"⚠️ Failed to fetch task after {max_retries} attempts: {e}")
+                    print(f"[MINER] Fetch task failed after {max_retries} attempts: {e}", flush=True)
         return None
 
     def _run_mining_loop(self):
         """Main mining loop - fetch tasks, generate answers, submit to API."""
+        print(
+            f"[MINER] API config: timeout={self.api_timeout}s debug={int(self.api_debug)} warmup={int(self.api_warmup)} poll_interval={self.poll_interval}s url={self.validator_api_url}",
+            flush=True,
+        )
+        self._warmup_validator_api()
         while not self.should_exit:
             # Fetch task from API
             task = self._fetch_task_from_api()
             if not task:
-                time.sleep(60)  # Wait before retry
+                print(f"[MINER] No task fetched. Sleeping {self.poll_interval}s...", flush=True)
+                time.sleep(self.poll_interval)
                 continue
             
             # Generate answer
             bt.logging.info(f"� Generating answer for task {task['id']}...")
+            print(f"[MINER] Generating answer for task {task['id']}...", flush=True)
             start_time = time.time()
             
             try:
@@ -248,6 +333,10 @@ Please show your reasoning and provide the answer in the required format."""}
                 
                 elapsed = time.time() - start_time
                 bt.logging.info(f"✅ Generated answer in {elapsed:.2f}s (length: {len(response)} chars)")
+                preview = response.replace("\n", " ")
+                if len(preview) > 300:
+                    preview = preview[:300] + "..."
+                print(f"[MINER] Generated answer in {elapsed:.2f}s (len={len(response)}). Preview: {preview}", flush=True)
                 
                 # Submit to API
                 self._submit_answer_to_api(task['id'], response, miner_uid=self.uid)

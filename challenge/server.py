@@ -88,6 +88,12 @@ class ConfigResponse(BaseModel):
     evaluation_config: Dict[str, Any]
 
 
+class MinerSubmission(BaseModel):
+    task_id: str
+    answer: str
+    miner_uid: int = None
+
+
 def query_miner_model(model_endpoint: str, prompt: str, api_key: str = None) -> str:
     """Query the miner's model endpoint"""
     headers = {"Content-Type": "application/json"}
@@ -101,17 +107,23 @@ def query_miner_model(model_endpoint: str, prompt: str, api_key: str = None) -> 
     }
     
     try:
+        print(f"  POST {model_endpoint}")
+        print(f"  Payload: {payload}")
         response = requests.post(
             model_endpoint,
             json=payload,
             headers=headers,
             timeout=30
         )
+        print(f"  Response status: {response.status_code}")
+        print(f"  Response body: {response.text[:500]}")
         response.raise_for_status()
         data = response.json()
-        return data.get("output", "")
+        output = data.get("output", "")
+        print(f"  Extracted output: {output[:100]}")
+        return output
     except Exception as e:
-        print(f"  ❌ Error querying miner model: {e}")
+        print(f"  ❌ Error querying miner model: {type(e).__name__}: {e}")
         return ""
 
 
@@ -151,10 +163,18 @@ def evaluate(request: EvaluationRequest):
     try:
         # Get miner model endpoint
         model_endpoint = request.data.get("model_endpoint")
+        if not model_endpoint:
+            model_endpoint = request.data.get("miner_endpoint")
         model_api_key = request.data.get("model_api_key")
         
         if not model_endpoint:
             raise HTTPException(status_code=400, detail="Missing model_endpoint in request data")
+
+        model_endpoint = str(model_endpoint).strip()
+        if model_endpoint.endswith("/"):
+            model_endpoint = model_endpoint[:-1]
+        if not model_endpoint.endswith("/generate"):
+            model_endpoint = model_endpoint + "/generate"
         
         print(f"  Model endpoint: {model_endpoint}")
         
@@ -189,7 +209,10 @@ def evaluate(request: EvaluationRequest):
                 continue
             
             # Extract and compare answer
+            print(f"    📝 Model output: {model_output[:200]}...")
+            print(f"    🎯 Ground truth: {expected_answer}")
             is_correct, predicted = extract_and_compare(model_output, expected_answer)
+            print(f"    🔍 Extracted answer: {predicted}")
             
             if is_correct:
                 correct_count += 1
@@ -252,6 +275,39 @@ def evaluate(request: EvaluationRequest):
         )
 
 
+@app.post("/receive_answers")
+def receive_answers(submission: MinerSubmission):
+    """
+    Receive miner answer and score it against docmath dataset.
+    This is the correct way to use the challenge container.
+    """
+    print(f"\n📥 [RECEIVE_ANSWERS] Task: {submission.task_id}")
+    print(f"  Answer: {submission.answer[:200]}...")
+
+    # Find the task in dataset (use task_id as index)
+    task_index = int(submission.task_id) if submission.task_id.isdigit() else 0
+    if task_index >= len(dataset.samples):
+        task_index = 0
+
+    sample = dataset.samples[task_index]
+    expected_answer = sample.get_expected_answer()
+
+    print(f"  🎯 Ground truth: {expected_answer}")
+
+    # Extract and compare answer
+    is_correct, predicted = extract_and_compare(submission.answer, expected_answer)
+    print(f"  🔍 Extracted answer: {predicted}")
+    print(f"  ✅ Correct: {is_correct}")
+
+    return {
+        "task_id": submission.task_id,
+        "correct": is_correct,
+        "predicted": predicted,
+        "ground_truth": expected_answer,
+        "score": 1.0 if is_correct else 0.0
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     
@@ -264,9 +320,10 @@ if __name__ == "__main__":
     print(f"Samples per evaluation: {SAMPLES_PER_EVALUATION}")
     print(f"Timeout: {TIMEOUT_SECS}s")
     print("\nEndpoints:")
-    print("  GET  /health   - Health check")
-    print("  GET  /config   - Challenge configuration")
-    print("  POST /evaluate - Evaluate miner submission")
+    print("  GET  /health           - Health check")
+    print("  GET  /config           - Challenge configuration")
+    print("  POST /evaluate         - Evaluate miner submission (legacy)")
+    print("  POST /receive_answers  - Receive miner answer and score it")
     print("=" * 60)
     
     uvicorn.run(
