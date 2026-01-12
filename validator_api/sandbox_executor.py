@@ -141,8 +141,9 @@ class SandboxExecutor:
     def _validate_code(self, tree: ast.AST):
         """Validate that code doesn't contain dangerous operations"""
         class DangerousNodeChecker(ast.NodeVisitor):
-            def __init__(self):
+            def __init__(self, allowed_modules):
                 self.dangerous = []
+                self.allowed_modules = allowed_modules
             
             def visit_Import(self, node):
                 for alias in node.names:
@@ -162,7 +163,7 @@ class SandboxExecutor:
                         self.dangerous.append(f"Dangerous function call: {node.func.id}")
                 self.generic_visit(node)
         
-        checker = DangerousNodeChecker()
+        checker = DangerousNodeChecker(self.allowed_modules)
         checker.visit(tree)
         
         if checker.dangerous:
@@ -180,7 +181,8 @@ class SandboxExecutor:
                 output = func(*args)
                 result_queue.put(('success', output))
             except Exception as e:
-                result_queue.put(('error', str(e)))
+                import traceback
+                result_queue.put(('error', f"{e}\n{traceback.format_exc()}"))
         
         thread = threading.Thread(target=target)
         thread.daemon = True

@@ -528,20 +528,18 @@ def get_longcode_task(db: Session = Depends(get_db)):
     print(f"📤 [GET_LONGCODE_TASK] Generated task: {task_id}")
     
     # Store in DB with template_code
+    # Serialize test cases to JSON string for storage
+    import json
     db_task = models.Task(
         id=task_id,
         dataset_name="longcode",
         task_type="code_injection",
         context=sample.get_prompt_text(),
         prompt=sample.get_prompt_text(),
-        expected_output=sample.test_cases,  # Store test cases
+        expected_output=json.dumps([{"input_code": tc.input_code, "expected_output": tc.expected_output} for tc in sample.test_cases]),
         context_length=len(sample.get_prompt_text()),
         difficulty_level=sample.context_length,
         evaluation_metrics="code_execution",
-        extra_data={
-            "template_code": sample.get_template_code(),
-            "timeout": sample.timeout
-        }
     )
     try:
         db.add(db_task)
@@ -614,7 +612,9 @@ def submit_longcode(
         }
     
     # 3. Get test cases from task
-    test_cases = db_task.expected_output  # This contains test cases for longcode
+    import json
+    test_cases_json = db_task.expected_output
+    test_cases = json.loads(test_cases_json) if test_cases_json else []
     
     if not test_cases or not isinstance(test_cases, list):
         print(f"❌ [SUBMIT_LONGCODE] No test cases found for task {task_id}")
