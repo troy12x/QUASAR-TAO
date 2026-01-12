@@ -169,7 +169,7 @@ class SandboxExecutor:
         if checker.dangerous:
             raise ValueError(f"Code validation failed: {'; '.join(checker.dangerous)}")
     
-    def _execute_with_timeout(self, func, *args) -> ExecutionResult:
+    def _execute_with_timeout(self, func, test_input) -> ExecutionResult:
         """Execute function with timeout using signal or manual check"""
         import threading
         import queue
@@ -178,7 +178,11 @@ class SandboxExecutor:
         
         def target():
             try:
-                output = func(*args)
+                # Unpack test_input if it's a tuple
+                if isinstance(test_input, tuple):
+                    output = func(*test_input)
+                else:
+                    output = func(test_input)
                 result_queue.put(('success', output))
             except Exception as e:
                 import traceback
