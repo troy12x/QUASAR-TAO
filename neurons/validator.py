@@ -15,7 +15,7 @@ import bittensor as bt
 import random
 import traceback
 import requests
-from typing import List, Dict, Union, Optional
+from typing import List, Dict, Union, Optional, Any
 
 # Add the parent directory to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
