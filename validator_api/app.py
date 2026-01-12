@@ -556,7 +556,34 @@ def submit_longcode(
     db.add(db_result)
     db.commit()
     db.refresh(db_result)
-    
+
+    # 6. Update MinerScore (EMA)
+    miner_score = db.query(models.MinerScore).filter(
+        models.MinerScore.hotkey == hotkey
+    ).first()
+
+    if miner_score:
+        # Update existing score with EMA
+        alpha = 0.1  # EMA smoothing factor
+        new_score = alpha * evaluation_result["score"] + (1 - alpha) * miner_score.score
+        miner_score.score = new_score
+        miner_score.tasks_completed += 1
+        miner_score.last_updated = datetime.utcnow()
+    else:
+        # Create new MinerScore entry
+        # Default league and model_name for longcode submissions
+        miner_score = models.MinerScore(
+            hotkey=hotkey,
+            model_name="unknown",  # Could be passed in submission
+            league="100k",  # Default league
+            score=evaluation_result["score"],
+            tasks_completed=1,
+            last_updated=datetime.utcnow()
+        )
+        db.add(miner_score)
+
+    db.commit()
+
     return {
         "status": "evaluated",
         "result_id": db_result.id,
