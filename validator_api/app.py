@@ -20,9 +20,7 @@ if parent_dir not in sys.path:
 from . import models
 from . import auth
 from . import scoring
-from . import docmath_loader
 from . import longcode_loader
-from . import answer_extractor
 from . import sandbox_executor
 from .database import engine, get_db
 
@@ -43,9 +41,6 @@ app.add_middleware(
 
 # Initialize datasets
 print("🔄 Initializing datasets in API...")
-docmath_dataset = docmath_loader.DocmathDataset()
-print(f"✅ DocmathDataset ready with {len(docmath_dataset)} samples.")
-
 longcode_dataset = longcode_loader.LongcodeDataset()
 print(f"✅ LongcodeDataset ready with {len(longcode_dataset)} samples.")
 
@@ -79,85 +74,6 @@ def get_league(context_length: int) -> str:
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
-
-@app.get("/get_task", response_model=models.MinerTaskResponse)
-def get_task(db: Session = Depends(get_db)):
-    """
-    Returns a random sample from docmath dataset.
-    Returns task WITHOUT expected_output for miners.
-    """
-    print(f"📥 [GET_TASK] Request received")
-    
-    # Sample from docmath dataset
-    samples = docmath_dataset.sample(n=1)
-    
-    if not samples:
-        print("❌ [GET_TASK] Failed to sample from dataset!")
-        raise HTTPException(status_code=500, detail="Failed to sample from dataset")
-    
-    sample = samples[0]
-    # Ensure uniqueness even when the same sample is returned multiple times.
-    task_id = f"docmath_{sample.sample_id}_{uuid.uuid4().hex}"
-    
-    print(f"📤 [GET_TASK] Generated task: {task_id}")
-    
-    # Store in DB
-    db_task = models.Task(
-        id=task_id,
-        dataset_name="docmath",
-        task_type="qa",
-        context=sample.get_prompt_text(),
-        prompt=sample.get_prompt_text(),
-        expected_output=sample.ground_truth,
-        context_length=len(sample.get_prompt_text()),
-        difficulty_level="medium",
-        evaluation_metrics="accuracy"
-    )
-    try:
-        db.add(db_task)
-        db.commit()
-        db.refresh(db_task)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Database error: failed to persist task")
-    
-    # Return WITHOUT expected_output for miners
-    return models.MinerTaskResponse(
-        id=db_task.id,
-        dataset_name=db_task.dataset_name,
-        task_type=db_task.task_type,
-        context=db_task.context,
-        prompt=db_task.prompt,
-        context_length=db_task.context_length,
-        difficulty_level=db_task.difficulty_level,
-        evaluation_metrics=["accuracy"],
-        created_at=db_task.created_at
-    )
-
-@app.get("/get_task_details/{task_id}", response_model=models.MinerTaskResponse)
-def get_task_details(task_id: str, db: Session = Depends(get_db), hotkey: str = Depends(auth.verify_signature)):
-    """
-    Returns the details of a specific task WITHOUT expected_output.
-    Used by miners to fetch heavy context data.
-    """
-    print(f"📥 [GET_TASK_DETAILS] Request for {task_id} from {hotkey[:8]}...")
-    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
-    if not db_task:
-        print(f"❌ [GET_TASK_DETAILS] Task {task_id} not found!")
-        raise HTTPException(status_code=404, detail="Task not found")
-        
-    # Return WITHOUT expected_output for miners
-    return models.MinerTaskResponse(
-        id=db_task.id,
-        dataset_name=db_task.dataset_name,
-        task_type=db_task.task_type,
-        context=db_task.context,
-        prompt=db_task.prompt,
-        context_length=db_task.context_length,
-        difficulty_level=db_task.difficulty_level,
-        evaluation_metrics=db_task.evaluation_metrics.split(",") if db_task.evaluation_metrics else [],
-        created_at=db_task.created_at
-    )
 
 @app.post("/report_result")
 def report_result(
@@ -194,20 +110,10 @@ def report_result(
         print(f"ℹ️ [REPORT_RESULT] Already reported by {result_in.miner_hotkey[:8]}")
         return {"status": "already_reported", "score": existing_result.score}
 
-    # 4. Extract answer and compare with ground truth using docmath logic
-    ground_truth = db_task.expected_output
-    expected_answer = answer_extractor.extract_answer(ground_truth) or ground_truth
-    
-    is_correct, predicted_answer = answer_extractor.extract_and_compare(
-        resp_text, 
-        expected_answer,
-        tolerance=0.0
-    )
-    
-    # Base score: 1.0 if correct, 0.0 if incorrect
-    base_score = 1.0 if is_correct else 0.0
-    
-    method = "docmath_rule_based"
+    # 4. For longcode tasks, score is already calculated by /submit_longcode
+    # For direct reporting, use the provided score
+    base_score = result_in.score if result_in.score is not None else 0.0
+    method = "longcode_code_execution"
 
     # 5. Determine league from context length
     league = get_league(db_task.context_length)

@@ -46,6 +46,9 @@ class Validator(BaseValidatorNeuron):
         self.api_scores_cache = {}
         self.last_api_fetch = 0
         self.api_cache_ttl = 60  # Cache for 60 seconds
+
+        self.api_league = os.getenv("VALIDATOR_LEAGUE")
+        self.api_model_name = os.getenv("VALIDATOR_MODEL_NAME")
         
         bt.logging.info(f"📡 Validator API URL: {VALIDATOR_API_URL}")
 
@@ -61,8 +64,15 @@ class Validator(BaseValidatorNeuron):
         print(f"[VALIDATOR] Fetching fresh scores from API...", flush=True)
         
         try:
+            params = {}
+            if self.api_league:
+                params["league"] = self.api_league
+            if self.api_model_name:
+                params["model_name"] = self.api_model_name
+
             response = requests.get(
                 f"{VALIDATOR_API_URL}/get_scores",
+                params=params,
                 timeout=30
             )
             response.raise_for_status()

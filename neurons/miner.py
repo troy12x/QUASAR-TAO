@@ -172,30 +172,6 @@ class Miner(BaseMinerNeuron):
             "Signature": signature,
         }
 
-    def _submit_answer_to_api(self, task_id: str, answer: str, miner_uid: int = 0) -> bool:
-        """Submit answer to validator_api (for docmath tasks)."""
-        try:
-            payload = {
-                "task_id": task_id,
-                "answer": answer,
-                "miner_uid": miner_uid
-            }
-            
-            headers = self._get_auth_headers()
-            headers["Content-Type"] = "application/json"
-            
-            response = self._api_request("POST", "/receive_answers", headers=headers, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            
-            bt.logging.info(f"✅ Submitted answer to API: task_id={task_id}, status={result.get('status')}")
-            print(f"[MINER] Submitted answer to API: task_id={task_id}, status={result.get('status')}", flush=True)
-            return True
-        except Exception as e:
-            bt.logging.warning(f"⚠️ Failed to submit answer to API: {e}")
-            print(f"[MINER] Submit answer failed: {e}", flush=True)
-            return False
-
     def _submit_longcode_to_api(self, task_id: str, code: str, function_name: str = "solve", miner_uid: int = 0) -> bool:
         """Submit code to validator_api (for longcode tasks)."""
         try:
@@ -222,27 +198,19 @@ class Miner(BaseMinerNeuron):
             return False
 
     def _fetch_task_from_api(self):
-        """Fetch a task from validator_api (longcode or docmath)."""
+        """Fetch a task from validator_api (longcode only)."""
         max_retries = 5
         for attempt in range(max_retries):
             try:
                 headers = self._get_auth_headers()
                 
-                # Try longcode task first
+                # Fetch longcode task
                 response = self._api_request("GET", "/get_longcode_task", headers=headers)
                 if response.status_code == 200:
                     data = response.json()
                     bt.logging.info(f"📥 Fetched longcode task: {data['id']}")
                     print(f"[MINER] Fetched longcode task: {data['id']}", flush=True)
                     return data
-                
-                # Fallback to docmath task
-                response = self._api_request("GET", "/get_task", headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                bt.logging.info(f"📥 Fetched docmath task: {data['id']}")
-                print(f"[MINER] Fetched docmath task: {data['id']}", flush=True)
-                return data
             except Exception as e:
                 if attempt < max_retries - 1:
                     bt.logging.warning(f"⚠️ Failed to fetch task (attempt {attempt + 1}/{max_retries}): {e}")
@@ -254,7 +222,7 @@ class Miner(BaseMinerNeuron):
         return None
 
     def _run_mining_loop(self):
-        """Main mining loop - fetch tasks, generate answers, submit to API."""
+        """Main mining loop - fetch tasks, generate code, submit to API."""
         print(
             f"[MINER] API config: timeout={self.api_timeout}s debug={int(self.api_debug)} warmup={int(self.api_warmup)} poll_interval={self.poll_interval}s url={self.validator_api_url}",
             flush=True,
@@ -267,90 +235,94 @@ class Miner(BaseMinerNeuron):
                 print(f"[MINER] No task fetched. Sleeping {self.poll_interval}s...", flush=True)
                 time.sleep(self.poll_interval)
                 continue
-            
-            # Generate answer
-            bt.logging.info(f"� Generating answer for task {task['id']}...")
-            print(f"[MINER] Generating answer for task {task['id']}...", flush=True)
-            start_time = time.time()
-            
+
+            template_code = task.get("template_code")
+            prompt = task.get("prompt")
+            if not template_code or not prompt:
+                print(f"[MINER] Invalid longcode task payload for task_id={task.get('id')}", flush=True)
+                time.sleep(5)
+                continue
+
+            bt.logging.info(f"🧩 Generating code for task {task['id']}...")
+            print(f"[MINER] Generating code for task {task['id']}...", flush=True)
+
             try:
-                # Prepare input
-                context = task.get('context', '')
-                prompt = task.get('prompt', '')
-                
-                messages = [
-                    {"role": "system", "content": """You are a financial document analysis assistant.
-
-TASK:
-Read the provided financial document text and answer the question accurately.
-
-IMPORTANT:
-- Extract the answer directly from the provided document text
-- Be precise with numbers, dates, and financial terms
-- Show your reasoning step-by-step
-
-OUTPUT FORMAT:
-You MUST format your final answer as: "Therefore, the answer is (insert answer here)."
-Example: "Therefore, the answer is $100,000."
-The formatted answer MUST be the final sentence of your response."""},
-                    {"role": "user", "content": f"""Context:
-{context}
-
-Question: {prompt}
-
-Please show your reasoning and provide the answer in the required format."""}
-                ]
-                
-                text_input = self.tokenizer.apply_chat_template(
-                    messages, 
-                    tokenize=False, 
-                    add_generation_prompt=True
-                )
-                
-                model_inputs = self.tokenizer(
-                    [text_input], 
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=self.max_length
-                ).to(self.device)
-                
-                # Generate
-                with torch.no_grad():
-                    generated_ids = self.model.generate(
-                        model_inputs.input_ids,
-                        attention_mask=model_inputs.attention_mask,
-                        max_new_tokens=512,
-                        do_sample=True,
-                        temperature=0.1,
-                        top_p=0.9,
-                        pad_token_id=self.tokenizer.eos_token_id
-                    )
-                
-                generated_ids = [
-                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-                ]
-                response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-                
-                elapsed = time.time() - start_time
-                bt.logging.info(f"✅ Generated answer in {elapsed:.2f}s (length: {len(response)} chars)")
-                preview = response.replace("\n", " ")
-                if len(preview) > 300:
-                    preview = preview[:300] + "..."
-                print(f"[MINER] Generated answer in {elapsed:.2f}s (len={len(response)}). Preview: {preview}", flush=True)
-                
-                # Submit to API
-                self._submit_answer_to_api(task['id'], response, miner_uid=self.uid)
-                
-                # Cleanup
-                del model_inputs, generated_ids
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                
+                self._process_longcode_task(task_id=task["id"], template_code=template_code, prompt=prompt)
             except Exception as e:
                 bt.logging.error(f"❌ Error processing task: {e}")
-            
+                print(f"[MINER] Error processing task: {e}", flush=True)
+
             # Wait before next task
             time.sleep(60)
+
+    def _extract_function_name(self, template_code: str) -> str:
+        for line in template_code.split("\n"):
+            line = line.strip()
+            if line.startswith("def "):
+                return line.split("(")[0].replace("def ", "").strip()
+        return "solve"
+
+    def _process_longcode_task(self, *, task_id: str, template_code: str, prompt: str) -> None:
+        function_name = self._extract_function_name(template_code)
+
+        messages = [
+            {
+                "role": "system",
+                "content": """You are an expert Python programmer.
+
+Return ONLY Python code.
+
+Rules:
+- Implement the function(s) in the provided template.
+- Do not add any top-level code execution.
+- Do not import any modules.
+""",
+            },
+            {
+                "role": "user",
+                "content": f"""Template:
+{template_code}
+
+Requirements:
+{prompt}
+""",
+            },
+        ]
+
+        text_input = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        model_inputs = self.tokenizer(
+            [text_input],
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length,
+        ).to(self.device)
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(
+                model_inputs.input_ids,
+                attention_mask=model_inputs.attention_mask,
+                max_new_tokens=1024,
+                do_sample=True,
+                temperature=0.2,
+                top_p=0.9,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+
+        generated_ids = [
+            output_ids[len(input_ids) :] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+        ]
+        code = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+        preview = code.replace("\n", " ")
+        if len(preview) > 300:
+            preview = preview[:300] + "..."
+        print(f"[MINER] Generated code len={len(code)} preview={preview}", flush=True)
+
+        self._submit_longcode_to_api(task_id, code, function_name=function_name, miner_uid=self.uid)
+
+        del model_inputs, generated_ids
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     async def forward(
         self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
