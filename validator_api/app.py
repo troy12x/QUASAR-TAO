@@ -306,6 +306,75 @@ def get_scores(
 
     return query.all()
 
+@app.get("/get_pending_submissions")
+def get_pending_submissions(
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns pending submissions for local Docker evaluation.
+    Used by validators to fetch submissions and evaluate them locally.
+    """
+    # Get submissions that haven't been scored yet (score = 0 or None)
+    pending = db.query(models.Result).filter(
+        models.Result.score == 0.0
+    ).order_by(models.Result.created_at.desc()).limit(limit).all()
+    
+    results = []
+    for r in pending:
+        results.append({
+            "id": str(r.id),
+            "task_id": r.task_id,
+            "miner_hotkey": r.miner_hotkey,
+            "miner_uid": r.miner_uid,
+            "response_text": r.response_text,
+            "created_at": r.created_at.isoformat()
+        })
+    
+    return results
+
+@app.post("/update_score")
+def update_score(
+    result_id: str,
+    score: float,
+    db: Session = Depends(get_db)
+):
+    """
+    Update the score for a submission.
+    Used by validators after local Docker evaluation.
+    """
+    result = db.query(models.Result).filter(models.Result.id == result_id).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+    
+    result.score = score
+    
+    # Update MinerScore with EMA
+    miner_score = db.query(models.MinerScore).filter(
+        models.MinerScore.hotkey == result.miner_hotkey
+    ).first()
+    
+    if miner_score:
+        alpha = 0.1
+        new_score = alpha * score + (1 - alpha) * miner_score.score
+        miner_score.score = new_score
+        miner_score.tasks_completed += 1
+        miner_score.last_updated = datetime.utcnow()
+    else:
+        miner_score = models.MinerScore(
+            hotkey=result.miner_hotkey,
+            model_name="unknown",
+            league="100k",
+            score=score,
+            tasks_completed=1,
+            last_updated=datetime.utcnow()
+        )
+        db.add(miner_score)
+    
+    db.commit()
+    
+    return {"status": "updated", "score": score}
+
 @app.get("/stats/miner/{hotkey}")
 def get_miner_stats(hotkey: str, db: Session = Depends(get_db)):
     """
@@ -408,6 +477,23 @@ def get_global_stats(db: Session = Depends(get_db)):
         "accepted": accepted,
         "rejected": rejected,
         "avg_score": avg_score
+    }
+
+@app.get("/get_task/{task_id}")
+def get_task(task_id: str, db: Session = Depends(get_db)):
+    """Get task details including test cases for evaluation."""
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    import json
+    test_cases = json.loads(task.expected_output) if task.expected_output else []
+    
+    return {
+        "id": task.id,
+        "dataset_name": task.dataset_name,
+        "prompt": task.prompt,
+        "test_cases": test_cases
     }
 
 # ============================================================================
