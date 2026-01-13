@@ -572,6 +572,56 @@ def get_longcode_task(db: Session = Depends(get_db)):
     
     return response_dict
 
+@app.post("/submit_longcode_pending")
+def submit_longcode_pending(
+    submission: dict,
+    db: Session = Depends(get_db),
+    hotkey: str = Depends(auth.verify_signature)
+):
+    task_id = submission.get("task_id")
+    code = submission.get("code")
+
+    if not task_id or not code:
+        raise HTTPException(status_code=400, detail="Missing task_id or code")
+
+    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if db_task.dataset_name != "longcode":
+        raise HTTPException(status_code=400, detail="Not a longcode task")
+
+    existing_result = db.query(models.Result).filter(
+        models.Result.task_id == task_id,
+        models.Result.miner_hotkey == hotkey
+    ).first()
+    if existing_result:
+        return {
+            "status": "already_submitted",
+            "result_id": existing_result.id,
+            "score": existing_result.score
+        }
+
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    db_result = models.Result(
+        task_id=task_id,
+        miner_hotkey=hotkey,
+        miner_uid=submission.get("miner_uid", 0),
+        response_hash=code_hash,
+        response_text=code,
+        score=None
+    )
+    db.add(db_result)
+    db.commit()
+    db.refresh(db_result)
+
+    return {
+        "status": "stored",
+        "result_id": db_result.id,
+        "task_id": task_id,
+        "miner_hotkey": hotkey
+    }
+
 @app.post("/submit_longcode")
 def submit_longcode(
     submission: dict,
