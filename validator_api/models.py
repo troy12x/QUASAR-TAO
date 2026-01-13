@@ -78,6 +78,8 @@ class MinerTaskResponse(BaseModel):
     difficulty_level: str
     evaluation_metrics: List[str]
     created_at: datetime
+    template_code: Optional[str] = None  # Template code for miners to complete
+    timeout: Optional[int] = None  # Execution timeout
 
     class Config:
         from_attributes = True

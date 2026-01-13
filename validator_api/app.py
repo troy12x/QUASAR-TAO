@@ -562,15 +562,12 @@ def get_longcode_task(db: Session = Depends(get_db)):
         context_length=db_task.context_length,
         difficulty_level=db_task.difficulty_level,
         evaluation_metrics=["code_execution"],
-        created_at=db_task.created_at
+        created_at=db_task.created_at,
+        template_code=sample.get_template_code(),
+        timeout=sample.timeout
     )
     
-    # Add template_code to response
-    response_dict = response.dict()
-    response_dict["template_code"] = sample.get_template_code()
-    response_dict["timeout"] = sample.timeout
-    
-    return response_dict
+    return response
 
 @app.post("/submit_longcode_pending")
 def submit_longcode_pending(

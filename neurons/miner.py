@@ -211,6 +211,11 @@ class Miner(BaseMinerNeuron):
                     data = response.json()
                     bt.logging.info(f"📥 Fetched longcode task: {data['id']}")
                     print(f"[MINER] Fetched longcode task: {data['id']}", flush=True)
+                    # Debug: print task structure
+                    if self.api_debug:
+                        print(f"[MINER] Task keys: {list(data.keys())}", flush=True)
+                        print(f"[MINER] template_code present: {'template_code' in data}, len={len(data.get('template_code', ''))}", flush=True)
+                        print(f"[MINER] prompt present: {'prompt' in data}, len={len(data.get('prompt', ''))}", flush=True)
                     return data
             except Exception as e:
                 if attempt < max_retries - 1:
