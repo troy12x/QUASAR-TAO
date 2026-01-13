@@ -4,6 +4,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 from typing import List, Optional, Dict
+from pydantic import BaseModel
 import uuid
 import sys
 import os
