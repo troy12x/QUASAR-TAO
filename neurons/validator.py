@@ -15,6 +15,7 @@ import bittensor as bt
 import random
 import traceback
 import requests
+import ast
 from typing import List, Dict, Union, Optional, Any
 
 # Add the parent directory to path
@@ -39,10 +40,44 @@ class DockerExecutor:
     
     def __init__(self):
         self.runner_container_id = None
+        self._cleanup_old_containers()
+    
+    def _cleanup_old_containers(self):
+        """Clean up any old quasar-runner containers."""
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "-a", "--filter", "name=quasar-runner", "--format", "{{.Names}}"],
+                capture_output=True, text=True
+            )
+            for name in result.stdout.strip().split('\n'):
+                if name:
+                    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        except:
+            pass
+    
+    def _get_available_port(self):
+        """Find an available port."""
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))
+            s.listen(1)
+            port = s.getsockname()[1]
+        return port
     
     def execute_code(self, code: str, function_name: str, test_input: Any) -> Dict:
         """Execute code in a Docker container."""
         print(f"[DOCKER] Executing {function_name} with input {test_input}", flush=True)
+        try:
+            print(f"[DOCKER] Code length: {len(code) if code is not None else 0}", flush=True)
+        except Exception:
+            pass
+        
+        # Get path to code_runner.py
+        challenge_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "challenge")
+        code_runner_path = os.path.join(challenge_dir, "code_runner.py")
+        
+        if not os.path.exists(code_runner_path):
+            return {"success": False, "error": f"code_runner.py not found at {code_runner_path}"}
         
         # Create temporary file for code
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
@@ -51,59 +86,75 @@ class DockerExecutor:
         
         container_name = f"quasar-runner-{uuid.uuid4().hex[:8]}"
         
+        # Get a random available port
+        port = self._get_available_port()
+        
         try:
-            # Create container
+            # Create container with code and code_runner mounted
             cmd = [
                 "docker", "run", "-d",
                 "--name", container_name,
-                "-p", f"{CODE_RUNNER_PORT}:{CODE_RUNNER_PORT}",
-                "-v", f"{code_file}:/app/code.py:ro",
+                "-p", f"{port}:{port}",
+                "-v", f"{code_file}:/app/miner_code.py:ro",
+                "-v", f"{code_runner_path}:/app/code_runner.py:ro",
                 "-w", "/app",
                 "python:3.11-slim",
-                "tail", "-f", "/dev/null"
+                "sh", "-c",
+                f"pip install fastapi uvicorn pydantic -q && python code_runner.py {port}"
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            print(f"[DOCKER] Starting container on port {port}", flush=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
             if result.returncode != 0:
+                print(f"[DOCKER] Failed to create container: {result.stderr}", flush=True)
                 return {"success": False, "error": f"Failed to create container: {result.stderr}"}
             
             container_id = result.stdout.strip()
-            
-            # Start code runner HTTP server
-            exec_cmd = [
-                "docker", "exec", "-d", container_id,
-                "python", "-c",
-                "import sys; sys.path.insert(0, '/app'); "
-                "exec(open('/app/code.py').read(), globals()); "
-                "from code_runner import app; "
-                "import uvicorn; "
-                "uvicorn.run(app, host='0.0.0.0', port=8765)"
-            ]
-            
-            subprocess.run(exec_cmd, capture_output=True)
+            print(f"[DOCKER] Container started: {container_id}", flush=True)
             
             # Wait for health check
-            health_url = f"http://localhost:{CODE_RUNNER_PORT}/health"
+            health_url = f"http://localhost:{port}/health"
+            print(f"[DOCKER] Waiting for health check at {health_url}...", flush=True)
+            
+            # Give container time to install dependencies and start server
+            time.sleep(5)
+            
             for i in range(50):
                 try:
                     response = requests.get(health_url, timeout=1)
                     if response.status_code == 200:
+                        print(f"[DOCKER] Health check passed after {i*0.1}s", flush=True)
                         break
-                except:
+                except Exception as e:
+                    if i % 10 == 0:
+                        print(f"[DOCKER] Health check attempt {i+1}/50: {e}", flush=True)
                     time.sleep(0.1)
             else:
+                print(f"[DOCKER] Health check failed, container logs:", flush=True)
+                logs = subprocess.run(["docker", "logs", container_id], capture_output=True, text=True)
+                print(f"[DOCKER] {logs.stdout}", flush=True)
                 self._cleanup(container_id)
                 return {"success": False, "error": "Runner container failed to start"}
             
             # Send execute request
-            execute_url = f"http://localhost:{CODE_RUNNER_PORT}/execute"
+            execute_url = f"http://localhost:{port}/execute"
+            print(f"[DOCKER] Sending execute request to {execute_url}", flush=True)
             response = requests.post(
                 execute_url,
-                json={"code": "", "function_name": function_name, "test_input": test_input},
+                json={"code": code, "function_name": function_name, "test_input": test_input},
                 timeout=EXECUTION_TIMEOUT
             )
             
             result_data = response.json()
+            print(f"[DOCKER] Execution result: {result_data}", flush=True)
+
+            if not result_data.get("success"):
+                logs = subprocess.run(["docker", "logs", container_id], capture_output=True, text=True)
+                if logs.stdout:
+                    print(f"[DOCKER] Runner logs:\n{logs.stdout}", flush=True)
+                if logs.stderr:
+                    print(f"[DOCKER] Runner stderr:\n{logs.stderr}", flush=True)
             
             # Cleanup
             self._cleanup(container_id)
@@ -111,6 +162,7 @@ class DockerExecutor:
             return result_data
             
         except Exception as e:
+            print(f"[DOCKER] Exception: {traceback.format_exc()}", flush=True)
             return {"success": False, "error": str(e)}
         finally:
             os.unlink(code_file)
@@ -188,6 +240,23 @@ class Validator(BaseValidatorNeuron):
             bt.logging.warning(f"Failed to fetch scores from API: {e}")
             return self.api_scores_cache  # Return stale cache if fetch fails
 
+    def _infer_function_name(self, code: str) -> str:
+        try:
+            tree = ast.parse(code or "")
+            fn_names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
+            if "solve" in fn_names:
+                return "solve"
+            for preferred in ("main", "solution"):
+                if preferred in fn_names:
+                    return preferred
+            if len(fn_names) == 1:
+                return fn_names[0]
+            if len(fn_names) > 1:
+                return fn_names[0]
+        except Exception:
+            pass
+        return "solve"
+
     def evaluate_submissions_locally(self):
         """Fetch pending submissions from API and evaluate them locally using Docker."""
         print(f"[VALIDATOR] 🐳 Evaluating submissions locally with Docker...", flush=True)
@@ -213,12 +282,13 @@ class Validator(BaseValidatorNeuron):
                 return
             
             for submission in submissions:
-                result_id = submission["id"]
+                result_id = str(submission["id"])
                 task_id = submission["task_id"]
                 code = submission["response_text"]
                 miner_hotkey = submission["miner_hotkey"]
                 
-                print(f"[VALIDATOR] Evaluating submission {result_id[:8]}...", flush=True)
+                function_name = self._infer_function_name(code)
+                print(f"[VALIDATOR] Evaluating submission {result_id[:8]} (fn={function_name})...", flush=True)
                 
                 # Fetch task details to get test cases
                 task_response = requests.get(
@@ -233,7 +303,7 @@ class Validator(BaseValidatorNeuron):
                 task_data = task_response.json()
                 test_cases = task_data.get("test_cases", [])
                 
-                if not test_cases:
+                if not isinstance(test_cases, list) or not test_cases:
                     print(f"[VALIDATOR] ⚠️ No test cases for task {task_id}, skipping submission", flush=True)
                     continue
                 
@@ -249,7 +319,7 @@ class Validator(BaseValidatorNeuron):
                     # Execute in Docker
                     result = self.docker_executor.execute_code(
                         code=code,
-                        function_name="solve",
+                        function_name=function_name,
                         test_input=test_input
                     )
                     

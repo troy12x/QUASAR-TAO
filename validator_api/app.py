@@ -316,10 +316,15 @@ def get_pending_submissions(
     Returns pending submissions for local Docker evaluation.
     Used by validators to fetch submissions and evaluate them locally.
     """
-    # Get submissions that haven't been scored yet (score = 0 or None)
-    pending = db.query(models.Result).filter(
-        models.Result.score == 0.0
-    ).order_by(models.Result.created_at.desc()).limit(limit).all()
+    pending = (
+        db.query(models.Result)
+        .join(models.Task, models.Task.id == models.Result.task_id)
+        .filter(models.Task.dataset_name == "longcode")
+        .filter(models.Result.score.is_(None))
+        .order_by(models.Result.created_at.desc())
+        .limit(limit)
+        .all()
+    )
     
     results = []
     for r in pending:
@@ -335,7 +340,7 @@ def get_pending_submissions(
     return results
 
 class UpdateScoreRequest(BaseModel):
-    result_id: str
+    result_id: int
     score: float
 
 @app.post("/update_score")
@@ -347,7 +352,7 @@ def update_score(
     Update the score for a submission.
     Used by validators after local Docker evaluation.
     """
-    result = db.query(models.Result).filter(models.Result.id == request.result_id).first()
+    result = db.query(models.Result).filter(models.Result.id == int(request.result_id)).first()
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
     
