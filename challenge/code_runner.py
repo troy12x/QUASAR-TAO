@@ -213,19 +213,49 @@ def execute_code(code: str, function_name: str, test_input: Any) -> ExecuteRespo
         # Execute function
         if chosen_name:
             func = namespace[chosen_name]
+            # Parse test_input as JSON list for multi-argument functions
+            import json
             try:
-                result = func(test_input)
-            except TypeError:
-                result = func()
+                # Try to parse as JSON list for multi-argument functions
+                if isinstance(test_input, str) and test_input.strip().startswith('['):
+                    args = json.loads(test_input)
+                    result = func(*args)
+                else:
+                    # Single argument or no argument
+                    try:
+                        result = func(test_input)
+                    except TypeError:
+                        result = func()
+            except Exception as e:
+                return ExecuteResponse(
+                    success=False,
+                    output=None,
+                    error=f"Function execution error: {e}",
+                    execution_time_ms=(time.time() - start_time) * 1000
+                )
         else:
             cls_name, method_name = chosen_method
             cls = namespace[cls_name]
             obj = cls()
             method = getattr(obj, method_name)
+            # Parse test_input as JSON list for multi-argument methods
+            import json
             try:
-                result = method(test_input)
-            except TypeError:
-                result = method()
+                if isinstance(test_input, str) and test_input.strip().startswith('['):
+                    args = json.loads(test_input)
+                    result = method(*args)
+                else:
+                    try:
+                        result = method(test_input)
+                    except TypeError:
+                        result = method()
+            except Exception as e:
+                return ExecuteResponse(
+                    success=False,
+                    output=None,
+                    error=f"Method execution error: {e}",
+                    execution_time_ms=(time.time() - start_time) * 1000
+                )
         
         execution_time_ms = (time.time() - start_time) * 1000
         

@@ -137,8 +137,16 @@ class LongcodeDataset:
             "template_code": "def add(a, b):\n    # Your code here\n    pass",
             "test_cases": [
                 {
-                    "input_code": "",
+                    "input_code": "[1, 2]",
                     "expected_output": 3
+                },
+                {
+                    "input_code": "[5, 7]",
+                    "expected_output": 12
+                },
+                {
+                    "input_code": "[-1, 1]",
+                    "expected_output": 0
                 }
             ],
             "timeout": 30
