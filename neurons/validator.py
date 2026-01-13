@@ -257,10 +257,16 @@ class Validator(BaseValidatorNeuron):
             pass
         return "solve"
 
-    def evaluate_submissions_locally(self):
-        """Fetch pending submissions from API and evaluate them locally using Docker."""
+    def evaluate_submissions_locally(self) -> Dict[str, float]:
+        """Fetch pending submissions from API and evaluate them locally using Docker.
+        
+        Returns:
+            Dictionary mapping miner_hotkey to score (0.0 to 1.0).
+        """
         print(f"[VALIDATOR] 🐳 Evaluating submissions locally with Docker...", flush=True)
         bt.logging.info("🐳 Evaluating submissions locally with Docker...")
+        
+        evaluated_scores = {}  # hotkey -> score
         
         try:
             # Fetch pending submissions from API
@@ -349,10 +355,18 @@ class Validator(BaseValidatorNeuron):
                 update_response.raise_for_status()
                 
                 print(f"[VALIDATOR] ✅ Updated score for {miner_hotkey[:12]}...", flush=True)
+                evaluated_scores[miner_hotkey] = score
+            
+            if evaluated_scores:
+                print(f"[VALIDATOR] ✅ Evaluated {len(evaluated_scores)} submissions", flush=True)
+            else:
+                print(f"[VALIDATOR] ⚠️ No submissions were evaluated", flush=True)
                 
         except Exception as e:
             print(f"[VALIDATOR] ⚠️ Failed to evaluate submissions: {e}", flush=True)
             bt.logging.warning(f"Failed to evaluate submissions: {e}")
+        
+        return evaluated_scores
 
     def load_state(self):
         """Load validator state from disk."""
@@ -383,78 +397,41 @@ class Validator(BaseValidatorNeuron):
             bt.logging.error(f"❌ Failed to save state: {e}")
 
     async def forward(self):
-        """Main validation loop - evaluate submissions locally with Docker."""
+        """Main validation loop - evaluate pending submissions locally with Docker and submit weights."""
         print("[VALIDATOR] ➡️ Starting validation cycle...", flush=True)
         bt.logging.info("➡️ Starting validation cycle...")
 
         try:
-            # Step 1: Evaluate pending submissions locally with Docker
-            print("[VALIDATOR] 🐳 Step 1: Evaluating pending submissions locally...", flush=True)
-            self.evaluate_submissions_locally()
+            # Evaluate pending submissions locally with Docker
+            print("[VALIDATOR] 🐳 Evaluating pending submissions locally...", flush=True)
+            evaluated_scores = self.evaluate_submissions_locally()
             
-            # Step 2: Fetch scores from API
-            print("[VALIDATOR] 📊 Step 2: Fetching scores from API...", flush=True)
-            api_scores = self.fetch_api_scores()
-
-            # Get serving miners
-            print("[VALIDATOR] Scanning metagraph for serving miners...", flush=True)
-            all_miner_uids = [
-                uid for uid in range(self.metagraph.n)
-                if self.metagraph.axons[uid].is_serving and uid != self.uid
-            ]
-
-            if not all_miner_uids:
-                print("[VALIDATOR] ⚠️ No serving miners found, skipping round", flush=True)
-                bt.logging.warning("No serving miners found, skipping round")
+            # If no submissions were evaluated, skip this cycle
+            if not evaluated_scores:
+                print("[VALIDATOR] ⚠️ No pending submissions to evaluate, skipping cycle", flush=True)
+                bt.logging.info("No pending submissions, skipping cycle")
                 return
-
-            print(f"[VALIDATOR] 🎯 Found {len(all_miner_uids)} serving miners in metagraph", flush=True)
-
-            # Filter to only miners that have submitted to the API
+            
+            # Map hotkeys to UIDs and submit weights
+            print("[VALIDATOR] 📊 Submitting weights for evaluated miners...", flush=True)
             miner_uids = []
-            for uid in all_miner_uids:
-                hotkey = self.metagraph.hotkeys[uid]
-                if hotkey in api_scores:
-                    miner_uids.append(uid)
-
-            if not miner_uids:
-                print("[VALIDATOR] ⚠️ No miners have submitted to API yet, skipping round", flush=True)
-                bt.logging.warning("No miners have submitted to API yet, skipping round")
-                return
-
-            print(f"[VALIDATOR] 🎯 Evaluating {len(miner_uids)} miners with API submissions: {miner_uids}", flush=True)
-            bt.logging.info(f"🎯 Evaluating {len(miner_uids)} miners with API submissions")
-
-            # Evaluate each miner using API scores
-            rewards = []
-            for i, uid in enumerate(miner_uids):
-                miner_hotkey = self.metagraph.hotkeys[uid]
-                score = api_scores.get(miner_hotkey, 0.0)
-                rewards.append(score)
-                
-                # Update local scores
-                self.scores[uid] = score
-                
-                print(f"[VALIDATOR]   Miner {uid} ({miner_hotkey[:8]}...): score={score:.4f}", flush=True)
-                bt.logging.info(f"  Miner {uid} ({miner_hotkey[:8]}...): score={score:.4f}")
-                
-                # Delay between evaluations (except for last miner)
-                if i < len(miner_uids) - 1:
-                    time.sleep(EVALUATION_DELAY)
-
-            # Log summary
-            avg_score = sum(rewards) / len(rewards) if rewards else 0.0
-            print(f"[VALIDATOR] ✅ Evaluation complete: avg_score={avg_score:.4f}", flush=True)
-            bt.logging.success(f"✅ Evaluation complete: avg_score={avg_score:.4f}")
-
-            # Submit weights to Bittensor
-            print(f"[VALIDATOR] Submitting weights for {len(miner_uids)} miners...", flush=True)
-            await self.submit_weights(miner_uids)
             
-            # Save state periodically
-            if self.step % 10 == 0:
-                print(f"[VALIDATOR] Saving state at step {self.step}...", flush=True)
-                self.save_state()
+            for hotkey, score in evaluated_scores.items():
+                # Find UID for this hotkey in metagraph
+                for uid in range(self.metagraph.n):
+                    if self.metagraph.hotkeys[uid] == hotkey:
+                        miner_uids.append(uid)
+                        self.scores[uid] = score
+                        print(f"[VALIDATOR]   Miner {uid} ({hotkey[:8]}...): score={score:.4f}", flush=True)
+                        break
+            
+            if miner_uids:
+                print(f"[VALIDATOR] ✅ Submitting weights for {len(miner_uids)} miners", flush=True)
+                await self.submit_weights(miner_uids)
+                print(f"[VALIDATOR] ✅ Cycle complete", flush=True)
+                bt.logging.success(f"✅ Cycle complete: evaluated {len(evaluated_scores)} submissions")
+            else:
+                print("[VALIDATOR] ⚠️ No matching UIDs found for evaluated hotkeys", flush=True)
                 
         except Exception as e:
             print(f"[VALIDATOR] ❌ Error in forward: {e}", flush=True)
