@@ -461,10 +461,8 @@ class Validator(BaseValidatorNeuron):
         
         try:
             # Submit weights to Bittensor
-            self.set_weights(
-                weights=weights_u16,
-                poll_key="quasar_subnet"
-            )
+            # Note: set_weights takes (weights, poll_key=None) as positional args
+            self.set_weights(weights_u16, poll_key="quasar_subnet")
             
             bt.logging.success(f"✅ Weights submitted to Bittensor")
             bt.logging.info(f"   Top miners: {[(uid, float(weights[uid])) for uid in sorted(miner_uids, key=lambda u: weights[u], reverse=True)[:5]]}")

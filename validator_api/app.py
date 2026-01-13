@@ -831,3 +831,19 @@ def submit_longcode(
         "timeouts": evaluation_result["timeouts"],
         "test_results": evaluation_result["results"]
     }
+
+@app.delete("/delete_submission/{result_id}")
+def delete_submission(
+    result_id: int,
+    db: Session = Depends(get_db)
+):
+    """Delete a submission by result_id (for cleanup/testing)."""
+    result = db.query(models.Result).filter(models.Result.id == result_id).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    db.delete(result)
+    db.commit()
+    
+    print(f"  Deleted submission {result_id} from miner {result.miner_hotkey[:8]}")
+    return {"status": "deleted", "result_id": result_id}
