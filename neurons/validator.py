@@ -40,6 +40,8 @@ class DockerExecutor:
     
     def __init__(self):
         self.runner_container_id = None
+        self.runner_port = None
+        self.runner_code = None
         self._cleanup_old_containers()
     
     def _cleanup_old_containers(self):
@@ -64,13 +66,16 @@ class DockerExecutor:
             port = s.getsockname()[1]
         return port
     
-    def execute_code(self, code: str, function_name: str, test_input: Any) -> Dict:
-        """Execute code in a Docker container."""
-        print(f"[DOCKER] Executing {function_name} with input {test_input}", flush=True)
+    def _cleanup(self, container_id: str):
+        """Stop and remove a container."""
         try:
-            print(f"[DOCKER] Code length: {len(code) if code is not None else 0}", flush=True)
-        except Exception:
+            subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=10)
+        except:
             pass
+    
+    def start_container(self, code: str, function_name: str) -> Dict:
+        """Start a Docker container with the code loaded. Returns container info."""
+        print(f"[DOCKER] Starting container for {function_name}...", flush=True)
         
         # Get path to code_runner.py
         challenge_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "challenge")
@@ -137,43 +142,70 @@ class DockerExecutor:
                 self._cleanup(container_id)
                 return {"success": False, "error": "Runner container failed to start"}
             
-            # Send execute request
-            execute_url = f"http://localhost:{port}/execute"
-            print(f"[DOCKER] Sending execute request to {execute_url}", flush=True)
+            # Store container info for reuse
+            self.runner_container_id = container_id
+            self.runner_port = port
+            self.runner_code = code
+            
+            return {"success": True, "container_id": container_id, "port": port}
+            
+        except Exception as e:
+            print(f"[DOCKER] Exception: {traceback.format_exc()}", flush=True)
+            return {"success": False, "error": str(e)}
+    
+    def execute_in_container(self, function_name: str, test_input: Any) -> Dict:
+        """Execute a test case in the running container."""
+        if not self.runner_container_id or not self.runner_port:
+            return {"success": False, "error": "No running container. Call start_container first."}
+        
+        print(f"[DOCKER] Executing {function_name} with input {test_input}", flush=True)
+        
+        try:
+            execute_url = f"http://localhost:{self.runner_port}/execute"
             response = requests.post(
                 execute_url,
-                json={"code": code, "function_name": function_name, "test_input": test_input},
+                json={"code": self.runner_code, "function_name": function_name, "test_input": test_input},
                 timeout=EXECUTION_TIMEOUT
             )
             
             result_data = response.json()
             print(f"[DOCKER] Execution result: {result_data}", flush=True)
-
-            if not result_data.get("success"):
-                logs = subprocess.run(["docker", "logs", container_id], capture_output=True, text=True)
-                if logs.stdout:
-                    print(f"[DOCKER] Runner logs:\n{logs.stdout}", flush=True)
-                if logs.stderr:
-                    print(f"[DOCKER] Runner stderr:\n{logs.stderr}", flush=True)
-            
-            # Cleanup
-            self._cleanup(container_id)
             
             return result_data
             
         except Exception as e:
             print(f"[DOCKER] Exception: {traceback.format_exc()}", flush=True)
             return {"success": False, "error": str(e)}
-        finally:
-            os.unlink(code_file)
     
-    def _cleanup(self, container_id: str):
-        """Stop and remove container."""
+    def stop_container(self):
+        """Stop and remove the running container."""
+        if self.runner_container_id:
+            print(f"[DOCKER] Stopping container {self.runner_container_id}...", flush=True)
+            self._cleanup(self.runner_container_id)
+            self.runner_container_id = None
+            self.runner_port = None
+            self.runner_code = None
+    
+    def execute_code(self, code: str, function_name: str, test_input: Any) -> Dict:
+        """Execute code in a Docker container (legacy method for single execution)."""
+        # Start container
+        start_result = self.start_container(code, function_name)
+        if not start_result.get("success"):
+            return start_result
+        
+        # Execute
+        result = self.execute_in_container(function_name, test_input)
+        
+        # Stop container
+        self.stop_container()
+        
+        # Cleanup temp file
         try:
-            subprocess.run(["docker", "stop", container_id], capture_output=True)
-            subprocess.run(["docker", "rm", container_id], capture_output=True)
+            os.unlink(code_file)
         except:
             pass
+        
+        return result
 
 class Validator(BaseValidatorNeuron):
     """
@@ -184,6 +216,14 @@ class Validator(BaseValidatorNeuron):
     def __init__(self, config=None):
         super(Validator, self).__init__(config=config)
         bt.logging.info("🚀 Initializing QUASAR Validator...")
+        
+        # Set polling interval from config (default 5 minutes = 300 seconds)
+        polling_interval = getattr(config.neuron, 'polling_interval', 300)
+        if hasattr(self, 'neuron'):
+            self.neuron.polling_interval_seconds = polling_interval
+        elif hasattr(self, '_polling_interval_seconds'):
+            self._polling_interval_seconds = polling_interval
+        bt.logging.info(f"⏱️ Polling interval: {polling_interval}s ({polling_interval/60:.1f} minutes)")
         
         # Initialize Docker executor for local execution
         self.docker_executor = DockerExecutor()
@@ -318,24 +358,34 @@ class Validator(BaseValidatorNeuron):
                 total = len(test_cases)
                 docker_failed = False
                 
-                for test_case in test_cases:
-                    test_input = test_case.get("input_code", "")
-                    expected_output = test_case.get("expected_output")
-                    
-                    # Execute in Docker
-                    result = self.docker_executor.execute_code(
-                        code=code,
-                        function_name=function_name,
-                        test_input=test_input
-                    )
-                    
-                    if not result.get("success"):
-                        print(f"[VALIDATOR] ⚠️ Docker execution failed: {result.get('error')}, skipping submission", flush=True)
-                        docker_failed = True
-                        break
-                    
-                    if str(result.get("output")) == str(expected_output):
-                        passed += 1
+                # Start container once for all test cases
+                print(f"[VALIDATOR] Starting container for {total} test cases...", flush=True)
+                start_result = self.docker_executor.start_container(code, function_name)
+                if not start_result.get("success"):
+                    print(f"[VALIDATOR] ⚠️ Failed to start container: {start_result.get('error')}, skipping submission", flush=True)
+                    continue
+                
+                try:
+                    for test_case in test_cases:
+                        test_input = test_case.get("input_code", "")
+                        expected_output = test_case.get("expected_output")
+                        
+                        # Execute in running container
+                        result = self.docker_executor.execute_in_container(
+                            function_name=function_name,
+                            test_input=test_input
+                        )
+                        
+                        if not result.get("success"):
+                            print(f"[VALIDATOR] ⚠️ Docker execution failed: {result.get('error')}, skipping submission", flush=True)
+                            docker_failed = True
+                            break
+                        
+                        if str(result.get("output")) == str(expected_output):
+                            passed += 1
+                finally:
+                    # Stop container after all test cases
+                    self.docker_executor.stop_container()
                 
                 # Skip if Docker failed
                 if docker_failed:
@@ -406,32 +456,24 @@ class Validator(BaseValidatorNeuron):
             print("[VALIDATOR] 🐳 Evaluating pending submissions locally...", flush=True)
             evaluated_scores = self.evaluate_submissions_locally()
             
-            # If no submissions were evaluated, skip this cycle
+            # If no submissions were evaluated, wait before next cycle
             if not evaluated_scores:
-                print("[VALIDATOR] ⚠️ No pending submissions to evaluate, skipping cycle", flush=True)
-                bt.logging.info("No pending submissions, skipping cycle")
+                print("[VALIDATOR] ⚠️ No pending submissions to evaluate, waiting 5 minutes...", flush=True)
+                bt.logging.info("No pending submissions, waiting 5 minutes...")
+                
+                # Get polling interval from config
+                polling_interval = getattr(self.neuron, 'polling_interval_seconds', 300) if hasattr(self, 'neuron') else 300
+                time.sleep(polling_interval)
                 return
             
-            # Map hotkeys to UIDs and submit weights
-            print("[VALIDATOR] 📊 Submitting weights for evaluated miners...", flush=True)
-            miner_uids = []
+            # Evaluation complete - scores are already updated in API
+            # Other validators will fetch weights from /get_weights and submit to chain
+            print(f"[VALIDATOR] ✅ Evaluation complete: {len(evaluated_scores)} submissions evaluated", flush=True)
+            print(f"[VALIDATOR] 📊 Scores updated in API - validators can fetch weights from /get_weights", flush=True)
+            bt.logging.success(f"✅ Evaluation complete: {len(evaluated_scores)} submissions")
             
             for hotkey, score in evaluated_scores.items():
-                # Find UID for this hotkey in metagraph
-                for uid in range(self.metagraph.n):
-                    if self.metagraph.hotkeys[uid] == hotkey:
-                        miner_uids.append(uid)
-                        self.scores[uid] = score
-                        print(f"[VALIDATOR]   Miner {uid} ({hotkey[:8]}...): score={score:.4f}", flush=True)
-                        break
-            
-            if miner_uids:
-                print(f"[VALIDATOR] ✅ Submitting weights for {len(miner_uids)} miners", flush=True)
-                await self.submit_weights(miner_uids)
-                print(f"[VALIDATOR] ✅ Cycle complete", flush=True)
-                bt.logging.success(f"✅ Cycle complete: evaluated {len(evaluated_scores)} submissions")
-            else:
-                print("[VALIDATOR] ⚠️ No matching UIDs found for evaluated hotkeys", flush=True)
+                print(f"[VALIDATOR]   {hotkey[:12]}...: score={score:.4f}", flush=True)
                 
         except Exception as e:
             print(f"[VALIDATOR] ❌ Error in forward: {e}", flush=True)
@@ -460,9 +502,11 @@ class Validator(BaseValidatorNeuron):
         weights_u16 = (weights * 65535).to(torch.uint16)
         
         try:
-            # Submit weights to Bittensor
-            # Note: set_weights takes (weights, poll_key=None) as positional args
-            self.set_weights(weights_u16, poll_key="quasar_subnet")
+            # Set weights on self (Bittensor reads from self.weights)
+            self.weights = weights_u16
+            
+            # Submit weights to Bittensor (no arguments needed)
+            self.set_weights()
             
             bt.logging.success(f"✅ Weights submitted to Bittensor")
             bt.logging.info(f"   Top miners: {[(uid, float(weights[uid])) for uid in sorted(miner_uids, key=lambda u: weights[u], reverse=True)[:5]]}")
@@ -497,6 +541,7 @@ if __name__ == "__main__":
     parser.add_argument("--neuron.sample_size", type=int, default=10, help="Number of miners to evaluate")
     parser.add_argument("--neuron.timeout", type=int, default=60, help="Timeout in seconds")
     parser.add_argument("--neuron.vpermit_tao_limit", type=int, default=4096, help="VPermit TAO limit")
+    parser.add_argument("--neuron.polling_interval", type=int, default=300, help="Polling interval in seconds (default: 300 = 5 minutes)")
     parser.add_argument("--logging.debug", action="store_true", help="Enable debug logging")
     
     args = parser.parse_args()

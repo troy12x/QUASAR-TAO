@@ -847,3 +847,44 @@ def delete_submission(
     
     print(f"  Deleted submission {result_id} from miner {result.miner_hotkey[:8]}")
     return {"status": "deleted", "result_id": result_id}
+
+class WeightEntry(BaseModel):
+    uid: int
+    hotkey: str
+    weight: float
+
+class GetWeightsResponse(BaseModel):
+    epoch: int
+    weights: List[WeightEntry]
+
+@app.get("/get_weights")
+def get_weights(
+    db: Session = Depends(get_db)
+):
+    """
+    Get weights for validators to submit to Bittensor.
+    Winner-takes-all: best miner gets 100% of weight.
+    """
+    # Get latest scores from MinerScore table
+    miner_scores = db.query(models.MinerScore).all()
+    
+    if not miner_scores:
+        return GetWeightsResponse(epoch=int(time.time()), weights=[])
+    
+    # Find winner (highest score)
+    winner = max(miner_scores, key=lambda x: x.score)
+    
+    # Map hotkey to UID (simplified - in production you'd need a registry)
+    # For now, return hotkey-based weights
+    weights = []
+    
+    # Winner gets 1.0 (100%)
+    weights.append(WeightEntry(
+        uid=0,  # Placeholder - validators should map hotkey to UID
+        hotkey=winner.hotkey,
+        weight=1.0
+    ))
+    
+    print(f"[WEIGHTS] Winner: {winner.hotkey[:12]}... with score {winner.score:.4f}")
+    
+    return GetWeightsResponse(epoch=int(time.time()), weights=weights)
