@@ -333,21 +333,24 @@ def get_pending_submissions(
     
     return results
 
+class UpdateScoreRequest(BaseModel):
+    result_id: str
+    score: float
+
 @app.post("/update_score")
 def update_score(
-    result_id: str,
-    score: float,
+    request: UpdateScoreRequest,
     db: Session = Depends(get_db)
 ):
     """
     Update the score for a submission.
     Used by validators after local Docker evaluation.
     """
-    result = db.query(models.Result).filter(models.Result.id == result_id).first()
+    result = db.query(models.Result).filter(models.Result.id == request.result_id).first()
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
     
-    result.score = score
+    result.score = request.score
     
     # Update MinerScore with EMA
     miner_score = db.query(models.MinerScore).filter(
@@ -356,7 +359,7 @@ def update_score(
     
     if miner_score:
         alpha = 0.1
-        new_score = alpha * score + (1 - alpha) * miner_score.score
+        new_score = alpha * request.score + (1 - alpha) * miner_score.score
         miner_score.score = new_score
         miner_score.tasks_completed += 1
         miner_score.last_updated = datetime.utcnow()
@@ -365,7 +368,7 @@ def update_score(
             hotkey=result.miner_hotkey,
             model_name="unknown",
             league="100k",
-            score=score,
+            score=request.score,
             tasks_completed=1,
             last_updated=datetime.utcnow()
         )
@@ -373,7 +376,7 @@ def update_score(
     
     db.commit()
     
-    return {"status": "updated", "score": score}
+    return {"status": "updated", "score": request.score}
 
 @app.get("/stats/miner/{hotkey}")
 def get_miner_stats(hotkey: str, db: Session = Depends(get_db)):

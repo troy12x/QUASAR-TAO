@@ -191,18 +191,26 @@ class Validator(BaseValidatorNeuron):
     def evaluate_submissions_locally(self):
         """Fetch pending submissions from API and evaluate them locally using Docker."""
         print(f"[VALIDATOR] 🐳 Evaluating submissions locally with Docker...", flush=True)
+        bt.logging.info("🐳 Evaluating submissions locally with Docker...")
         
         try:
             # Fetch pending submissions from API
+            print(f"[VALIDATOR] Fetching from: {VALIDATOR_API_URL}/get_pending_submissions", flush=True)
             response = requests.get(
                 f"{VALIDATOR_API_URL}/get_pending_submissions",
                 params={"limit": 10},
                 timeout=30
             )
+            print(f"[VALIDATOR] Response status: {response.status_code}", flush=True)
             response.raise_for_status()
             
             submissions = response.json()
             print(f"[VALIDATOR] Found {len(submissions)} pending submissions", flush=True)
+            bt.logging.info(f"Found {len(submissions)} pending submissions")
+            
+            if not submissions:
+                print("[VALIDATOR] No pending submissions to evaluate", flush=True)
+                return
             
             for submission in submissions:
                 result_id = submission["id"]
@@ -219,19 +227,20 @@ class Validator(BaseValidatorNeuron):
                 )
                 
                 if task_response.status_code != 200:
-                    print(f"[VALIDATOR] ⚠️ Failed to fetch task {task_id}", flush=True)
+                    print(f"[VALIDATOR] ⚠️ Failed to fetch task {task_id}, skipping submission", flush=True)
                     continue
                 
                 task_data = task_response.json()
                 test_cases = task_data.get("test_cases", [])
                 
                 if not test_cases:
-                    print(f"[VALIDATOR] ⚠️ No test cases for task {task_id}", flush=True)
+                    print(f"[VALIDATOR] ⚠️ No test cases for task {task_id}, skipping submission", flush=True)
                     continue
                 
                 # Evaluate code against test cases using Docker
                 passed = 0
                 total = len(test_cases)
+                docker_failed = False
                 
                 for test_case in test_cases:
                     test_input = test_case.get("input_code", "")
@@ -244,8 +253,18 @@ class Validator(BaseValidatorNeuron):
                         test_input=test_input
                     )
                     
-                    if result.get("success") and str(result.get("output")) == str(expected_output):
+                    if not result.get("success"):
+                        print(f"[VALIDATOR] ⚠️ Docker execution failed: {result.get('error')}, skipping submission", flush=True)
+                        docker_failed = True
+                        break
+                    
+                    if str(result.get("output")) == str(expected_output):
                         passed += 1
+                
+                # Skip if Docker failed
+                if docker_failed:
+                    print(f"[VALIDATOR] Skipping submission {result_id[:8]} due to Docker failure", flush=True)
+                    continue
                 
                 # Calculate score
                 score = passed / total if total > 0 else 0.0
