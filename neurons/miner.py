@@ -173,7 +173,7 @@ class Miner(BaseMinerNeuron):
         }
 
     def _submit_longcode_to_api(self, task_id: str, code: str, function_name: str = "solve", miner_uid: int = 0) -> bool:
-        """Submit code to validator_api (for longcode tasks)."""
+        """Submit code to validator_api (for longcode tasks) - stores as pending for Docker evaluation."""
         try:
             payload = {
                 "task_id": task_id,
@@ -185,12 +185,13 @@ class Miner(BaseMinerNeuron):
             headers = self._get_auth_headers()
             headers["Content-Type"] = "application/json"
             
-            response = self._api_request("POST", "/submit_longcode", headers=headers, json=payload)
+            # Submit to pending endpoint - validator will evaluate with Docker
+            response = self._api_request("POST", "/submit_longcode_pending", headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
             
-            bt.logging.info(f"✅ Submitted longcode to API: task_id={task_id}, status={result.get('status')}, score={result.get('score', 0):.4f}")
-            print(f"[MINER] Submitted longcode to API: task_id={task_id}, status={result.get('status')}, score={result.get('score', 0):.4f}", flush=True)
+            bt.logging.info(f"✅ Submitted longcode to API (pending): task_id={task_id}, status={result.get('status')}")
+            print(f"[MINER] Submitted longcode to API (pending): task_id={task_id}, status={result.get('status')}", flush=True)
             return True
         except Exception as e:
             bt.logging.warning(f"⚠️ Failed to submit longcode to API: {e}")
