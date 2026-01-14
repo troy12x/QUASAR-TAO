@@ -19,10 +19,9 @@
   - [Validators](#validators)
 - [Docker Architecture](#docker-architecture)
   - [Overview](#overview)
-  - [Miner Docker Setup](#miner-docker-setup)
   - [Validator Docker Setup](#validator-docker-setup)
   - [Code Execution Containers](#code-execution-containers)
-- [Evaluation Process](#evaluation-process)
+- [Evaluation Process](#evaluation-process)c
   - [Benchmark Tasks](#benchmark-tasks)
   - [Scoring System](#scoring-system)
   - [Reward Calculation](#reward-calculation)
@@ -81,66 +80,14 @@ Validators evaluate miner performance using standardized benchmarks:
 
 ### Overview
 
-QUASAR uses Docker containers for secure and isolated code execution. The architecture consists of three main container types:
+QUASAR uses Docker containers for secure and isolated code execution. The architecture consists of two main container types:
 
-1. Miner containers - Run long-context language models and respond to evaluation requests
-2. Validator containers - Evaluate miner submissions using Docker for code execution
-3. Code execution containers - Ephemeral containers that execute miner code in a sandboxed environment
+1. Validator containers - Evaluate miner submissions using Docker for code execution
+2. Code execution containers - Ephemeral containers that execute miner code in a sandboxed environment
 
 The validator creates temporary Docker containers for each submission, executes test cases, then destroys the containers. This ensures security and isolation while allowing flexible code evaluation.
 
-### Miner Docker Setup
-
-Miners can run in Docker for consistent environments and easy deployment.
-
-Build the miner Docker image:
-
-```bash
-# From QUASAR-SUBNET root directory
-docker build -t quasar-miner -f docker/Dockerfile.miner .
-```
-
-Run the miner container:
-
-```bash
-docker run -d \
-  --name quasar-miner \
-  --gpus all \
-  -p 8091:8091 \
-  -v ~/.bittensor/wallets:/root/.bittensor/wallets \
-  -e WALLET_NAME=miner \
-  -e WALLET_HOTKEY=default \
-  -e SUBTENSOR_NETWORK=finney \
-  -e NETUID=24 \
-  -e MODEL_NAME=silx-ai/Quasar-2M-Base \
-  quasar-miner
-```
-
-Miner Dockerfile example:
-
-```dockerfile
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
-
-WORKDIR /app
-
-# Install Python and dependencies
-RUN apt-get update && apt-get install -y \
-    python3.10 python3-pip git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy project files
-COPY . /app/
-
-# Install Python packages
-RUN pip3 install -r requirements.txt
-RUN pip3 install -e .
-
-# Expose axon port
-EXPOSE 8091
-
-# Run miner
-CMD ["python3", "neurons/miner.py"]
-```
+Miners run directly on the host system and don't require Docker.
 
 ### Validator Docker Setup
 
