@@ -21,7 +21,7 @@
   - [Overview](#overview)
   - [Validator Docker Setup](#validator-docker-setup)
   - [Code Execution Containers](#code-execution-containers)
-- [Evaluation Process](#evaluation-process)c
+- [Evaluation Process](#evaluation-process)
   - [Benchmark Tasks](#benchmark-tasks)
   - [Scoring System](#scoring-system)
   - [Reward Calculation](#reward-calculation)
@@ -86,60 +86,6 @@ QUASAR uses Docker containers for secure and isolated code execution. The archit
 2. Code execution containers - Ephemeral containers that execute miner code in a sandboxed environment
 
 The validator creates temporary Docker containers for each submission, executes test cases, then destroys the containers. This ensures security and isolation while allowing flexible code evaluation.
-
-Miners run directly on the host system and don't require Docker.
-
-### Validator Docker Setup
-
-Validators use Docker for two purposes: running the validator itself and executing miner code in sandboxed containers.
-
-Build the validator Docker image:
-
-```bash
-docker build -t quasar-validator -f docker/Dockerfile.validator .
-```
-
-Run the validator container:
-
-```bash
-docker run -d \
-  --name quasar-validator \
-  --gpus all \
-  -v ~/.bittensor/wallets:/root/.bittensor/wallets \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e VALIDATOR_API_URL=https://quasar-subnet.onrender.com \
-  -e WALLET_NAME=validator \
-  -e WALLET_HOTKEY=default \
-  -e SUBTENSOR_NETWORK=finney \
-  -e NETUID=24 \
-  -e POLLING_INTERVAL=300 \
-  quasar-validator
-```
-
-Important: The validator container needs access to `/var/run/docker.sock` to create and manage code execution containers.
-
-Validator Dockerfile example:
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install Docker CLI (needed for creating execution containers)
-RUN apt-get update && apt-get install -y \
-    docker.io \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy project files
-COPY . /app/
-
-# Install Python packages
-RUN pip install -r requirements.txt
-RUN pip install -e .
-
-# Run validator
-CMD ["python", "neurons/validator.py"]
-```
 
 ### Code Execution Containers
 
@@ -334,39 +280,79 @@ python neurons/miner.py \
 
 ### Running a Validator
 
-**Requirements**:
-- Python 3.9+
-- CUDA-capable GPU
-- Bittensor wallet with sufficient TAO for registration
+**What the validator does:**
+- Polls the validator API for pending miner code submissions
+- Creates Docker containers to execute miner code safely
+- Evaluates code against test cases
+- Updates scores in the API
+- Other validators fetch weights from API and submit to Bittensor
 
-**Setup**:
+**Requirements:**
+- Python 3.11+
+- Docker (for executing miner code in containers)
+- Bittensor wallet with sufficient TAO for registration
+- Internet connection (for API access)
+
+**Setup:**
+
 ```bash
-# Clone and install
 # Clone repository
-git clone https://github.com/your-org/QUASAR-TAO
-cd QUASAR-TAO/quasar_subnet
+git clone https://github.com/SILX-LABS/QUASAR-SUBNET
+cd QUASAR-SUBNET
+
+# Install Python dependencies
 pip install -r requirements.txt
 pip install -e .
 
-# Test in mock mode first
-python neurons/validator.py \
-  --wallet.name validator \
-  --wallet.hotkey default \
-  --mock \
-  --logging.debug
+# Start Docker (if not running)
+# On Linux: sudo systemctl start docker
+# On Mac/Windows: Docker Desktop should be running
 
-# Run on mainnet
+# Run validator
 python neurons/validator.py \
+  --netuid 24 \
+  --subtensor.network finney \
   --wallet.name validator \
   --wallet.hotkey default \
-  --subtensor.network finney \
-  --netuid 439
+  --neuron.polling_interval 300
 ```
 
-**Recommended**:
-- Set up WandB for monitoring: `export WANDB_API_KEY=<your key>`
-- Use PM2 for process management
-- Monitor validator logs regularly
+**No need to build Docker images:**
+- The validator automatically pulls `python:3.11-slim` from Docker Hub
+- The `challenge/code_runner.py` script is mounted into containers automatically
+- You only need Docker installed, not any custom images
+
+**What happens when you run:**
+1. Validator polls API for pending submissions
+2. For each submission, creates a Docker container
+3. Executes test cases in the container
+4. Calculates score and updates API
+5. Waits 5 minutes before next check (configurable)
+
+**Optional: Run validator in Docker (for production):**
+
+```bash
+# Build validator image
+docker build -t quasar-validator -f docker/Dockerfile.validator .
+
+# Run validator container
+docker run -d \
+  --name quasar-validator \
+  -v ~/.bittensor/wallets:/root/.bittensor/wallets \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e VALIDATOR_API_URL=https://quasar-subnet.onrender.com \
+  -e WALLET_NAME=validator \
+  -e WALLET_HOTKEY=default \
+  -e SUBTENSOR_NETWORK=finney \
+  -e NETUID=24 \
+  -e POLLING_INTERVAL=300 \
+  quasar-validator
+```
+
+**Recommended:**
+- Use PM2 for process management: `pm2 start neurons/validator.py --name validator`
+- Monitor validator logs: `pm2 logs validator`
+- Check API status: `curl https://quasar-subnet.onrender.com/health`
 
 ## Roadmap
 
