@@ -17,6 +17,11 @@
 - [How It Works](#how-it-works)
   - [Miners](#miners)
   - [Validators](#validators)
+- [Docker Architecture](#docker-architecture)
+  - [Overview](#overview)
+  - [Miner Docker Setup](#miner-docker-setup)
+  - [Validator Docker Setup](#validator-docker-setup)
+  - [Code Execution Containers](#code-execution-containers)
 - [Evaluation Process](#evaluation-process)
   - [Benchmark Tasks](#benchmark-tasks)
   - [Scoring System](#scoring-system)
@@ -71,6 +76,204 @@ Validators evaluate miner performance using standardized benchmarks:
 - Calculate accuracy using dataset-specific metrics (F1, EM, ROUGE)
 - Apply context-length multipliers to reward harder tasks
 - Update miner scores based on performance
+
+## Docker Architecture
+
+### Overview
+
+QUASAR uses Docker containers for secure and isolated code execution. The architecture consists of three main container types:
+
+1. Miner containers - Run long-context language models and respond to evaluation requests
+2. Validator containers - Evaluate miner submissions using Docker for code execution
+3. Code execution containers - Ephemeral containers that execute miner code in a sandboxed environment
+
+The validator creates temporary Docker containers for each submission, executes test cases, then destroys the containers. This ensures security and isolation while allowing flexible code evaluation.
+
+### Miner Docker Setup
+
+Miners can run in Docker for consistent environments and easy deployment.
+
+Build the miner Docker image:
+
+```bash
+# From QUASAR-SUBNET root directory
+docker build -t quasar-miner -f docker/Dockerfile.miner .
+```
+
+Run the miner container:
+
+```bash
+docker run -d \
+  --name quasar-miner \
+  --gpus all \
+  -p 8091:8091 \
+  -v ~/.bittensor/wallets:/root/.bittensor/wallets \
+  -e WALLET_NAME=miner \
+  -e WALLET_HOTKEY=default \
+  -e SUBTENSOR_NETWORK=finney \
+  -e NETUID=24 \
+  -e MODEL_NAME=silx-ai/Quasar-2M-Base \
+  quasar-miner
+```
+
+Miner Dockerfile example:
+
+```dockerfile
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+
+WORKDIR /app
+
+# Install Python and dependencies
+RUN apt-get update && apt-get install -y \
+    python3.10 python3-pip git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project files
+COPY . /app/
+
+# Install Python packages
+RUN pip3 install -r requirements.txt
+RUN pip3 install -e .
+
+# Expose axon port
+EXPOSE 8091
+
+# Run miner
+CMD ["python3", "neurons/miner.py"]
+```
+
+### Validator Docker Setup
+
+Validators use Docker for two purposes: running the validator itself and executing miner code in sandboxed containers.
+
+Build the validator Docker image:
+
+```bash
+docker build -t quasar-validator -f docker/Dockerfile.validator .
+```
+
+Run the validator container:
+
+```bash
+docker run -d \
+  --name quasar-validator \
+  --gpus all \
+  -v ~/.bittensor/wallets:/root/.bittensor/wallets \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e VALIDATOR_API_URL=https://quasar-subnet.onrender.com \
+  -e WALLET_NAME=validator \
+  -e WALLET_HOTKEY=default \
+  -e SUBTENSOR_NETWORK=finney \
+  -e NETUID=24 \
+  -e POLLING_INTERVAL=300 \
+  quasar-validator
+```
+
+Important: The validator container needs access to `/var/run/docker.sock` to create and manage code execution containers.
+
+Validator Dockerfile example:
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install Docker CLI (needed for creating execution containers)
+RUN apt-get update && apt-get install -y \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project files
+COPY . /app/
+
+# Install Python packages
+RUN pip install -r requirements.txt
+RUN pip install -e .
+
+# Run validator
+CMD ["python", "neurons/validator.py"]
+```
+
+### Code Execution Containers
+
+When evaluating miner submissions, the validator creates ephemeral Docker containers that execute the code in a sandboxed environment.
+
+Container lifecycle:
+
+```mermaid
+sequenceDiagram
+    participant V as Validator
+    participant D as Docker
+    participant C as Code Container
+
+    V->>D: Start container with code
+    D->>C: Create python:3.11-slim container
+    D->>C: Mount code_runner.py and miner_code.py
+    C->>C: Start FastAPI server
+    V->>C: Health check
+    C-->>V: OK
+    V->>C: Execute test case 1
+    C-->>V: Result
+    V->>C: Execute test case 2
+    C-->>V: Result
+    V->>C: Execute test case N
+    C-->>V: Result
+    V->>D: Stop and remove container
+    D->>C: Destroy container
+```
+
+Container details:
+
+Image: python:3.11-slim
+
+Mounted files:
+- /app/miner_code.py - Miner's submitted code (read-only)
+- /app/code_runner.py - Execution handler (read-only)
+
+Startup command:
+```bash
+pip install fastapi uvicorn pydantic -q && \
+python code_runner.py {port}
+```
+
+Health check:
+```bash
+GET http://localhost:{port}/health
+Response: {"status": "healthy", "version": "1.0"}
+```
+
+Execution endpoint:
+```bash
+POST http://localhost:{port}/execute
+Body: {
+  "code": "def add(a, b):\n    return a + b",
+  "function_name": "add",
+  "test_input": "[1, 2]"
+}
+Response: {
+  "success": true,
+  "output": 3,
+  "error": null,
+  "execution_time_ms": 2.5
+}
+```
+
+Security features:
+
+- No network access
+- No file system write access
+- Code validation blocks dangerous imports (os, sys, subprocess, etc.)
+- Container is destroyed after execution
+- Execution timeout (30 seconds default)
+
+Container reuse optimization:
+
+Instead of creating a new container for each test case, the validator:
+1. Starts one container per submission
+2. Executes all test cases sequentially in the same container
+3. Stops the container after all tests complete
+
+This reduces overhead from ~30 seconds per test to ~5 seconds total for a submission with 3 test cases.
 
 ## Evaluation Process
 
