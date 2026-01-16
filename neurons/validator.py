@@ -514,21 +514,6 @@ class Validator(BaseValidatorNeuron):
         except Exception as e:
             bt.logging.error(f"❌ Failed to submit weights: {e}")
 
-    async def evaluate_miner(self, uid: int, miner_hotkey: str) -> float:
-        """Evaluate a miner by querying validator_api for their scores."""
-        
-        print(f"[VALIDATOR]   Miner uid={uid} hotkey={miner_hotkey[:12]}...", flush=True)
-        
-        # Get scores from cache (fetches from API if cache is stale)
-        scores = self.fetch_api_scores()
-        
-        # Find the score for this specific miner
-        miner_score = scores.get(miner_hotkey, 0.0)
-        
-        print(f"[VALIDATOR]   Score: {miner_score:.4f}", flush=True)
-        bt.logging.info(f"    Miner {uid} score: {miner_score:.4f}")
-        return miner_score
-
 
 if __name__ == "__main__":
     import argparse

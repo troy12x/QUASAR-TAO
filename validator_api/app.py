@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +12,7 @@ import random
 import time
 import hashlib
 import requests
+from collections import defaultdict
 
 # Add parent directory to path to import quasar
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +43,28 @@ app.add_middleware(
 
 # Configuration
 CHALLENGE_URL = os.getenv("CHALLENGE_URL", "http://localhost:8080")
+
+# Rate limiting for DDOS protection
+# Simple in-memory rate limiter: {hotkey: [timestamp1, timestamp2, ...]}
+rate_limit_store = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX_REQUESTS = 10  # max requests per window
+
+def check_rate_limit(hotkey: str):
+    """Check if hotkey has exceeded rate limit."""
+    now = time.time()
+    # Remove old timestamps outside the window
+    rate_limit_store[hotkey] = [t for t in rate_limit_store[hotkey] if now - t < RATE_LIMIT_WINDOW]
+
+    if len(rate_limit_store[hotkey]) >= RATE_LIMIT_MAX_REQUESTS:
+        print(f"⚠️ [RATE_LIMIT] Hotkey {hotkey[:12]}... exceeded rate limit")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Max {RATE_LIMIT_MAX_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds."
+        )
+
+    # Add current timestamp
+    rate_limit_store[hotkey].append(now)
 
 # Initialize datasets
 print("🔄 Initializing datasets in API...")
@@ -510,26 +533,71 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
 # ============================================================================
 
 @app.get("/get_longcode_task", response_model=models.MinerTaskResponse)
-def get_longcode_task(db: Session = Depends(get_db)):
+def get_longcode_task(
+    db: Session = Depends(get_db),
+    hotkey: str = Depends(auth.verify_signature)
+):
     """
     Returns a random sample from longcode dataset.
     Returns task WITHOUT expected_output for miners.
     Includes template_code that miners need to complete.
+
+    Requires signature authentication and miner registration.
+    Rate limited to 1 active task per miner and 10 requests per minute.
     """
+    # Check rate limit (DDOS protection)
+    check_rate_limit(hotkey)
+
+    print(f"📥 [GET_LONGCODE_TASK] Request from {hotkey[:12]}...")
+
+    # Check if miner is registered
+    registration = db.query(models.MinerRegistration).filter(
+        models.MinerRegistration.hotkey == hotkey
+    ).first()
+
+    if not registration:
+        print(f"❌ [GET_LONGCODE_TASK] Unregistered miner: {hotkey[:12]}...")
+        raise HTTPException(status_code=403, detail="Miner not registered. Please register first.")
+
+    # Update last_seen
+    registration.last_seen = int(time.time())
+    db.commit()
+
+    # Check if miner has active task (not completed and not expired)
+    active_assignment = db.query(models.TaskAssignment).filter(
+        models.TaskAssignment.miner_hotkey == hotkey,
+        models.TaskAssignment.completed == False,
+        models.TaskAssignment.expired == False
+    ).first()
+
+    if active_assignment:
+        # Check if task is expired (10 minutes = 600 seconds)
+        if time.time() - active_assignment.assigned_at < 600:
+            print(f"⚠️ [GET_LONGCODE_TASK] Miner {hotkey[:12]}... already has active task")
+            raise HTTPException(
+                status_code=429,
+                detail="Already have active task. Complete it before requesting another."
+            )
+        else:
+            # Mark as expired, allow new task
+            print(f"⏰ [GET_LONGCODE_TASK] Task expired for {hotkey[:12]}...")
+            active_assignment.expired = True
+            db.commit()
+
     print(f"📥 [GET_LONGCODE_TASK] Request received")
-    
+
     # Sample from longcode dataset
     samples = longcode_dataset.sample(n=1)
-    
+
     if not samples:
         print("❌ [GET_LONGCODE_TASK] Failed to sample from dataset!")
         raise HTTPException(status_code=500, detail="Failed to sample from dataset")
-    
+
     sample = samples[0]
     task_id = f"longcode_{sample.sample_id}_{uuid.uuid4().hex}"
-    
+
     print(f"📤 [GET_LONGCODE_TASK] Generated task: {task_id}")
-    
+
     # Store in DB with template_code
     # Serialize test cases to JSON string for storage
     import json
@@ -551,6 +619,16 @@ def get_longcode_task(db: Session = Depends(get_db)):
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=500, detail="Database error: failed to persist task")
+
+    # Create task assignment
+    assignment = models.TaskAssignment(
+        task_id=task_id,
+        miner_hotkey=hotkey,
+        assigned_at=int(time.time()),
+        completed=False
+    )
+    db.add(assignment)
+    db.commit()
     
     # Return with template_code for miners
     response = models.MinerTaskResponse(
@@ -611,6 +689,20 @@ def submit_longcode_pending(
     db.add(db_result)
     db.commit()
     db.refresh(db_result)
+
+    # Mark task assignment as completed
+    assignment = db.query(models.TaskAssignment).filter(
+        models.TaskAssignment.task_id == task_id,
+        models.TaskAssignment.miner_hotkey == hotkey
+    ).first()
+
+    if assignment:
+        assignment.completed = True
+        assignment.completed_at = int(time.time())
+        db.commit()
+        print(f"✅ [SUBMIT] Task {task_id} marked as completed for {hotkey[:12]}...")
+    else:
+        print(f"⚠️ [SUBMIT] No assignment found for task {task_id} and miner {hotkey[:12]}...")
 
     return {
         "status": "stored",

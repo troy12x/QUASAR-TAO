@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
@@ -45,6 +45,27 @@ class MinerScore(Base):
     score = Column(Float, default=0.0)
     tasks_completed = Column(Integer, default=0)  # Track tasks per league
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class MinerRegistration(Base):
+    __tablename__ = "miner_registrations"
+
+    hotkey = Column(String, primary_key=True, index=True)
+    uid = Column(Integer, nullable=False)
+    registered_at = Column(Integer, nullable=False, default=lambda: int(datetime.utcnow().timestamp()))
+    last_seen = Column(Integer, nullable=False, default=lambda: int(datetime.utcnow().timestamp()))
+
+class TaskAssignment(Base):
+    __tablename__ = "task_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
+    miner_hotkey = Column(String, nullable=False, index=True)
+    assigned_at = Column(Integer, nullable=False, default=lambda: int(datetime.utcnow().timestamp()))
+    completed = Column(Boolean, default=False)
+    completed_at = Column(Integer, nullable=True)
+    expired = Column(Boolean, default=False)
+
+    task = relationship("Task", backref="assignments")
 
 # Pydantic Schemas
 class TaskBase(BaseModel):
