@@ -241,6 +241,20 @@ def register_miner(
     ).first()
 
     if existing:
+        # Check if MinerRegistration exists, create if not
+        registration = db.query(models.MinerRegistration).filter(
+            models.MinerRegistration.hotkey == hotkey
+        ).first()
+
+        if not registration:
+            new_registration = models.MinerRegistration(
+                hotkey=hotkey,
+                uid=0
+            )
+            db.add(new_registration)
+            db.commit()
+            print(f"✅ [REGISTER] Created missing MinerRegistration for {hotkey[:8]}")
+
         print(f"ℹ️ [REGISTER] Miner {hotkey[:8]} already registered for {req.model_name} in {req.league}")
         return {
             "status": "already_registered",
