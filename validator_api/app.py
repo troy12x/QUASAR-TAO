@@ -971,6 +971,31 @@ class GetWeightsResponse(BaseModel):
     epoch: int
     weights: List[WeightEntry]
 
+@app.get("/get_task_stats")
+def get_task_stats(db: Session = Depends(get_db)):
+    """
+    Get task statistics for the system.
+    Returns total tasks, completed tasks, pending tasks, and active assignments.
+    """
+    total_tasks = db.query(models.Task).count()
+    completed_tasks = db.query(models.Result).count()
+    pending_tasks = db.query(models.Task).filter(
+        ~models.Task.id.in_(
+            db.query(models.Result.task_id)
+        )
+    ).count()
+    active_assignments = db.query(models.TaskAssignment).filter(
+        models.TaskAssignment.completed == False,
+        models.TaskAssignment.expired == False
+    ).count()
+
+    return {
+        "total_tasks": total_tasks,
+        "completed_tasks": completed_tasks,
+        "pending_tasks": pending_tasks,
+        "active_assignments": active_assignments
+    }
+
 @app.get("/get_weights")
 def get_weights(
     db: Session = Depends(get_db)

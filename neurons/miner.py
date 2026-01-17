@@ -50,6 +50,12 @@ class Miner(BaseMinerNeuron):
         # Track active tasks for cleanup
         self.active_tasks = {}
         
+        # Mining statistics
+        self.tasks_processed = 0
+        self.tasks_succeeded = 0
+        self.tasks_failed = 0
+        self.start_time = time.time()
+        
         bt.logging.info("Initializing QUASAR-SUBNET Miner...")
         print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
         
@@ -204,7 +210,7 @@ class Miner(BaseMinerNeuron):
         for attempt in range(max_retries):
             try:
                 headers = self._get_auth_headers()
-                
+
                 # Fetch longcode task
                 response = self._api_request("GET", "/get_longcode_task", headers=headers)
                 if response.status_code == 200:
@@ -227,6 +233,17 @@ class Miner(BaseMinerNeuron):
                     print(f"[MINER] Fetch task failed after {max_retries} attempts: {e}", flush=True)
         return None
 
+    def _fetch_task_stats(self):
+        """Fetch task statistics from validator_api."""
+        try:
+            headers = self._get_auth_headers()
+            response = self._api_request("GET", "/get_task_stats", headers=headers)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            print(f"[MINER] Failed to fetch task stats: {e}", flush=True)
+        return None
+
     def _run_mining_loop(self):
         """Main mining loop - fetch tasks, generate code, submit to API."""
         print(
@@ -234,7 +251,24 @@ class Miner(BaseMinerNeuron):
             flush=True,
         )
         self._warmup_validator_api()
+
+        # Track processed task IDs
+        self.processed_tasks = []
+
         while not self.should_exit:
+            # Print stats every 10 tasks
+            if self.tasks_processed > 0 and self.tasks_processed % 10 == 0:
+                elapsed_time = time.time() - self.start_time
+                success_rate = (self.tasks_succeeded / self.tasks_processed * 100) if self.tasks_processed > 0 else 0
+                print(f"\n[MINER] ========== STATS ==========", flush=True)
+                print(f"[MINER] Tasks processed: {self.tasks_processed}", flush=True)
+                print(f"[MINER] Tasks succeeded: {self.tasks_succeeded}", flush=True)
+                print(f"[MINER] Tasks failed: {self.tasks_failed}", flush=True)
+                print(f"[MINER] Success rate: {success_rate:.1f}%", flush=True)
+                print(f"[MINER] Uptime: {elapsed_time/60:.1f} minutes", flush=True)
+                print(f"[MINER] Avg tasks/min: {self.tasks_processed/(elapsed_time/60):.2f}", flush=True)
+                print(f"[MINER] ============================\n", flush=True)
+
             # Fetch task from API
             task = self._fetch_task_from_api()
             if not task:
@@ -246,18 +280,33 @@ class Miner(BaseMinerNeuron):
             prompt = task.get("prompt")
             if not template_code or not prompt:
                 print(f"[MINER] Invalid longcode task payload for task_id={task.get('id')}", flush=True)
+                self.tasks_failed += 1
                 time.sleep(5)
                 continue
 
-            bt.logging.info(f"🧩 Generating code for task {task['id']}...")
-            print(f"[MINER] Generating code for task {task['id']}...", flush=True)
+            self.tasks_processed += 1
+            task_id = task['id']
+            self.processed_tasks.append(task_id)
+
+            bt.logging.info(f"🧩 Generating code for task {task_id} (task #{self.tasks_processed})...")
+            print(f"[MINER] ========== TASK #{self.tasks_processed} ==========", flush=True)
+            print(f"[MINER] Task ID: {task_id}", flush=True)
+            print(f"[MINER] Generating code...", flush=True)
 
             try:
-                self._process_longcode_task(task_id=task["id"], template_code=template_code, prompt=prompt)
+                success = self._process_longcode_task(task_id=task_id, template_code=template_code, prompt=prompt)
+                if success:
+                    self.tasks_succeeded += 1
+                    print(f"[MINER] ✅ Task #{self.tasks_processed} completed successfully", flush=True)
+                else:
+                    self.tasks_failed += 1
+                    print(f"[MINER] ❌ Task #{self.tasks_processed} failed", flush=True)
             except Exception as e:
+                self.tasks_failed += 1
                 bt.logging.error(f"❌ Error processing task: {e}")
-                print(f"[MINER] Error processing task: {e}", flush=True)
+                print(f"[MINER] ❌ Task #{self.tasks_processed} error: {e}", flush=True)
 
+            print(f"[MINER] =====================================", flush=True)
             # Wait before next task
             time.sleep(60)
 
@@ -268,7 +317,7 @@ class Miner(BaseMinerNeuron):
                 return line.split("(")[0].replace("def ", "").strip()
         return "solve"
 
-    def _process_longcode_task(self, *, task_id: str, template_code: str, prompt: str) -> None:
+    def _process_longcode_task(self, *, task_id: str, template_code: str, prompt: str) -> bool:
         function_name = self._extract_function_name(template_code)
 
         messages = [
@@ -341,11 +390,20 @@ Requirements:
             preview = preview[:300] + "..."
         print(f"[MINER] Generated code len={len(code)} preview={preview}", flush=True)
 
-        self._submit_longcode_to_api(task_id, code, function_name=function_name, miner_uid=self.uid)
+        # Submit to API
+        print(f"[MINER] Submitting to API...", flush=True)
+        submission_success = self._submit_longcode_to_api(task_id, code, function_name=function_name, miner_uid=self.uid)
+
+        if submission_success:
+            print(f"[MINER] ✅ Task {task_id} submitted successfully", flush=True)
+        else:
+            print(f"[MINER] ❌ Task {task_id} submission failed", flush=True)
 
         del model_inputs, generated_ids
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+        return submission_success
 
     async def forward(
         self, synapse: quasar.protocol.BenchmarkEvaluationSynapse
