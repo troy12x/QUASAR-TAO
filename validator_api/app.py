@@ -972,22 +972,43 @@ class GetWeightsResponse(BaseModel):
     weights: List[WeightEntry]
 
 @app.get("/get_task_stats")
-def get_task_stats(db: Session = Depends(get_db)):
+def get_task_stats(db: Session = Depends(get_db), hotkey: Optional[str] = None):
     """
     Get task statistics for the system.
     Returns total tasks, completed tasks, pending tasks, and active assignments.
+    If hotkey is provided, returns stats for that specific miner only.
     """
-    total_tasks = db.query(models.Task).count()
-    completed_tasks = db.query(models.Result).count()
-    pending_tasks = db.query(models.Task).filter(
-        ~models.Task.id.in_(
-            db.query(models.Result.task_id)
-        )
-    ).count()
-    active_assignments = db.query(models.TaskAssignment).filter(
-        models.TaskAssignment.completed == False,
-        models.TaskAssignment.expired == False
-    ).count()
+    # Filter by hotkey if provided
+    if hotkey:
+        total_tasks = db.query(models.Task).join(
+            models.TaskAssignment, models.Task.id == models.TaskAssignment.task_id
+        ).filter(
+            models.TaskAssignment.miner_hotkey == hotkey
+        ).count()
+
+        completed_tasks = db.query(models.Result).filter(
+            models.Result.miner_hotkey == hotkey
+        ).count()
+
+        pending_tasks = db.query(models.TaskAssignment).filter(
+            models.TaskAssignment.miner_hotkey == hotkey,
+            models.TaskAssignment.completed == False,
+            models.TaskAssignment.expired == False
+        ).count()
+
+        active_assignments = pending_tasks  # Same as pending for a specific miner
+    else:
+        total_tasks = db.query(models.Task).count()
+        completed_tasks = db.query(models.Result).count()
+        pending_tasks = db.query(models.Task).filter(
+            ~models.Task.id.in_(
+                db.query(models.Result.task_id)
+            )
+        ).count()
+        active_assignments = db.query(models.TaskAssignment).filter(
+            models.TaskAssignment.completed == False,
+            models.TaskAssignment.expired == False
+        ).count()
 
     return {
         "total_tasks": total_tasks,

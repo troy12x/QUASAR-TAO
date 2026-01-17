@@ -234,10 +234,10 @@ class Miner(BaseMinerNeuron):
         return None
 
     def _fetch_task_stats(self):
-        """Fetch task statistics from validator_api."""
+        """Fetch task statistics from validator_api for this miner."""
         try:
             headers = self._get_auth_headers()
-            response = self._api_request("GET", "/get_task_stats", headers=headers)
+            response = self._api_request("GET", f"/get_task_stats?hotkey={self.wallet.hotkey.ss58_address}", headers=headers)
             if response.status_code == 200:
                 return response.json()
         except Exception as e:
@@ -268,6 +268,11 @@ class Miner(BaseMinerNeuron):
                 print(f"[MINER] Uptime: {elapsed_time/60:.1f} minutes", flush=True)
                 print(f"[MINER] Avg tasks/min: {self.tasks_processed/(elapsed_time/60):.2f}", flush=True)
                 print(f"[MINER] ============================\n", flush=True)
+
+            # Fetch and display task stats
+            task_stats = self._fetch_task_stats()
+            if task_stats:
+                print(f"[MINER] System Stats: Total={task_stats.get('total_tasks', 0)} | Completed={task_stats.get('completed_tasks', 0)} | Pending={task_stats.get('pending_tasks', 0)} | Active={task_stats.get('active_assignments', 0)}", flush=True)
 
             # Fetch task from API
             task = self._fetch_task_from_api()
