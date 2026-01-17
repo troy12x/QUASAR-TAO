@@ -6,6 +6,9 @@ import time
 import typing
 import requests
 import hashlib
+import subprocess
+import tempfile
+import shutil
 from typing import Optional, List, Any, Dict
 from pydantic import Field
 import torch
@@ -530,17 +533,330 @@ Requirements:
         """Log current RAM and GPU memory usage."""
         process = psutil.Process(os.getpid())
         ram_usage = process.memory_info().rss / (1024 * 1024)  # MB
-        bt.logging.info(f"💾 [MEMORY] {stage} | RAM: {ram_usage:.2f} MB")
+        bt.logging.info(f" [MEMORY] {stage} | RAM: {ram_usage:.2f} MB")
         
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 mem = torch.cuda.memory_reserved(i) / (1024 * 1024)
                 bt.logging.info(f" [MEMORY] {stage} | GPU {i}: {mem:.2f} MB")
 
+    # ========== QUASAR KERNEL OPTIMIZATION ==========
+
+    def clone_quasar_repo(self, repo_path: str = None) -> str:
+        """Clone the flash-linear-attention repository."""
+        if repo_path is None:
+            repo_path = os.path.join(tempfile.gettempdir(), "flash-linear-attention")
+        
+        repo_url = "https://github.com/troy12x/flash-linear-attention.git"
+        
+        bt.logging.info(f"Cloning Quasar repository from {repo_url} to {repo_path}")
+        print(f"[QUASAR] Cloning repository to {repo_path}...", flush=True)
+        
+        # Remove existing repo if present
+        if os.path.exists(repo_path):
+            bt.logging.info(f"Removing existing repository at {repo_path}")
+            shutil.rmtree(repo_path)
+        
+        # Clone repo
+        try:
+            subprocess.run(
+                ["git", "clone", repo_url, repo_path],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            bt.logging.info(f" Repository cloned successfully to {repo_path}")
+            return repo_path
+        except subprocess.CalledProcessError as e:
+            bt.logging.error(f" Failed to clone repository: {e.stderr}")
+            raise
+
+    def read_quasar_files(self, repo_path: str) -> Dict[str, str]:
+        """Read all Quasar attention files."""
+        quasar_dir = os.path.join(repo_path, "fla/ops/quasar")
+        
+        files_to_read = [
+            "chunk.py",
+            "chunk_intra_token_parallel.py",
+            "forward_substitution.py",
+            "fused_recurrent.py",
+            "gate.py",
+            "__init__.py"
+        ]
+        
+        codebase = {}
+        for filename in files_to_read:
+            file_path = os.path.join(quasar_dir, filename)
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    codebase[filename] = f.read()
+                bt.logging.info(f"Read {filename} ({len(codebase[filename])} chars)")
+            else:
+                bt.logging.warning(f"File not found: {file_path}")
+        
+        return codebase
+
+    def analyze_and_optimize_with_ai(self, codebase: Dict[str, str], task_description: str) -> str:
+        """Use AI to analyze code and generate optimizations."""
+        
+        # Prepare context for AI
+        context = f"""You are a GPU kernel optimization expert specializing in Triton kernels for Quasar attention.
+
+Task: {task_description}
+
+Target Files (ONLY modify these files in fla/ops/quasar/):
+{chr(10).join([f"### {name} ###\n{code}" for name, code in codebase.items()])}
+
+Instructions:
+1. Analyze the current implementation
+2. Identify performance bottlenecks
+3. Generate optimized kernel code
+4. Focus on tokens/sec and memory usage for sequences 4K-100K
+5. Keep changes ONLY in fla/ops/quasar/ files
+6. Maintain numerical accuracy (rtol < 1e-3)
+7. Return the complete optimized file contents
+
+Response Format:
+### filename.py ###
+<optimized code>
+### filename.py ###
+<optimized code>
+...
+"""
+        
+        bt.logging.info("Sending code to AI for optimization...")
+        print(f"[QUASAR] Sending {len(codebase)} files to AI for optimization...", flush=True)
+        
+        # Prepare messages for LLM
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a GPU kernel optimization expert specializing in Triton kernels. Return ONLY the optimized file contents in the specified format."
+            },
+            {
+                "role": "user",
+                "content": context
+            }
+        ]
+        
+        # Tokenize input
+        text_input = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        model_inputs = self.tokenizer(
+            [text_input],
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length,
+        ).to(self.device)
+        
+        input_length = model_inputs.input_ids.shape[1]
+        print(f"[QUASAR] Input length: {input_length} tokens", flush=True)
+        
+        # Generate optimized code
+        import time
+        start_time = time.time()
+        
+        with torch.no_grad():
+            generated_ids = self.model.generate(
+                model_inputs.input_ids,
+                attention_mask=model_inputs.attention_mask,
+                max_new_tokens=16000,  # Allow long responses for multiple files
+                do_sample=True,
+                temperature=0.3,
+                top_p=0.9,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+        
+        end_time = time.time()
+        generation_time = end_time - start_time
+        
+        generated_ids = [
+            output_ids[len(input_ids) :] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+        ]
+        output_length = generated_ids[0].shape[0]
+        tokens_per_sec = output_length / generation_time if generation_time > 0 else 0
+        
+        print(f"[QUASAR] Generated {output_length} tokens in {generation_time:.2f}s", flush=True)
+        print(f"[QUASAR] Speed: {tokens_per_sec:.2f} tokens/sec", flush=True)
+        
+        ai_response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        del model_inputs, generated_ids
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return ai_response
+
+    def parse_ai_response(self, ai_response: str) -> Dict[str, str]:
+        """Parse AI response to extract optimized file contents."""
+        files = {}
+        
+        # Split by ### filename ### pattern
+        parts = ai_response.split("### ")
+        
+        current_file = None
+        current_content = []
+        
+        for part in parts:
+            if not part.strip():
+                continue
+            
+            lines = part.split("\n", 1)
+            if len(lines) >= 1:
+                # Extract filename
+                filename = lines[0].strip()
+                if filename.endswith(" ###"):
+                    filename = filename[:-4].strip()
+                
+                # Extract content
+                content = lines[1] if len(lines) > 1 else ""
+                
+                if filename and content:
+                    files[filename] = content
+                    bt.logging.info(f"Parsed optimized file: {filename} ({len(content)} chars)")
+        
+        return files
+
+    def write_optimized_files(self, repo_path: str, optimized_files: Dict[str, str]) -> List[str]:
+        """Write optimized files to repository."""
+        modified_files = []
+        
+        for filename, content in optimized_files.items():
+            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
+            
+            # Verify file is in quasar directory
+            if not file_path.startswith(os.path.join(repo_path, "fla/ops/quasar")):
+                bt.logging.warning(f"Skipping file outside quasar directory: {file_path}")
+                continue
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            modified_files.append(filename)
+            bt.logging.info(f"Wrote optimized file: {filename}")
+        
+        return modified_files
+
+    def generate_diff(self, repo_path: str) -> str:
+        """Generate git diff of changes."""
+        result = subprocess.run(
+            ["git", "diff", "fla/ops/quasar/"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True
+        )
+        
+        diff = result.stdout
+        bt.logging.info(f"Generated diff: {len(diff)} characters")
+        
+        return diff
+
+    def get_base_commit(self, repo_path: str) -> str:
+        """Get the base commit hash."""
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True
+        )
+        
+        return result.stdout.strip()
+
+    def submit_quasar_diff(self, diff: str, description: str) -> bool:
+        """Submit diff to QuasarSubnet API."""
+        try:
+            payload = {
+                "miner_hotkey": self.wallet.hotkey.ss58_address,
+                "diff": diff,
+                "base_commit": "latest",
+                "description": description,
+                "signature": self._sign_message(diff)
+            }
+            
+            headers = self._get_auth_headers()
+            headers["Content-Type"] = "application/json"
+            
+            # Submit to QuasarSubnet API
+            response = self._api_request("POST", "/upload_submission", headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            
+            bt.logging.info(f" Submitted Quasar diff: {result.get('submission_id')}")
+            print(f"[QUASAR]  Submitted diff: {result.get('submission_id')}", flush=True)
+            return True
+        except Exception as e:
+            bt.logging.warning(f" Failed to submit Quasar diff: {e}")
+            print(f"[QUASAR]  Submit diff failed: {e}", flush=True)
+            return False
+
+    def run_quasar_optimization(self) -> bool:
+        """Run the complete Quasar optimization workflow."""
+        try:
+            print(f"\n[QUASAR] ========== Starting Quasar Optimization ==========", flush=True)
+            
+            # Step 1: Clone repository
+            repo_path = self.clone_quasar_repo()
+            
+            # Step 2: Read Quasar files
+            codebase = self.read_quasar_files(repo_path)
+            print(f"[QUASAR] Read {len(codebase)} files", flush=True)
+            
+            # Step 3: Use AI to optimize
+            task_description = "Optimize Quasar attention kernels for maximum tokens/sec and minimum memory usage on sequences 4K-100K. Focus on Triton kernel optimizations."
+            ai_response = self.analyze_and_optimize_with_ai(codebase, task_description)
+            
+            # Step 4: Parse AI response
+            optimized_files = self.parse_ai_response(ai_response)
+            print(f"[QUASAR] Parsed {len(optimized_files)} optimized files", flush=True)
+            
+            if not optimized_files:
+                bt.logging.error("No optimized files parsed from AI response")
+                return False
+            
+            # Step 5: Write optimized files
+            modified_files = self.write_optimized_files(repo_path, optimized_files)
+            print(f"[QUASAR] Modified {len(modified_files)} files", flush=True)
+            
+            # Step 6: Generate diff
+            diff = self.generate_diff(repo_path)
+            print(f"[QUASAR] Generated diff: {len(diff)} characters", flush=True)
+            
+            # Step 7: Submit to subnet
+            description = f"AI-optimized Quasar attention kernels. Modified files: {', '.join(modified_files)}"
+            success = self.submit_quasar_diff(diff, description)
+            
+            if success:
+                print(f"[QUASAR]  Optimization completed successfully", flush=True)
+                self.tasks_succeeded += 1
+            else:
+                print(f"[QUASAR]  Optimization submission failed", flush=True)
+                self.tasks_failed += 1
+            
+            # Cleanup
+            if os.path.exists(repo_path):
+                shutil.rmtree(repo_path)
+                bt.logging.info(f"Cleaned up repository at {repo_path}")
+            
+            return success
+            
+        except Exception as e:
+            bt.logging.error(f" Error in Quasar optimization: {e}")
+            print(f"[QUASAR]  Error: {e}", flush=True)
+            self.tasks_failed += 1
+            return False
+
 # This is the main function, which runs the miner.
 if __name__ == "__main__":
     import argparse
     import threading
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="QuasarSubnet Miner")
+    parser.add_argument("--mode", type=str, default="longcode", 
+                       choices=["longcode", "quasar"],
+                       help="Mining mode: longcode (default) or quasar")
+    parser.add_argument("--quasar-interval", type=float, default=3600,
+                       help="Interval between Quasar optimizations in seconds (default: 3600)")
+    args = parser.parse_args()
 
     # Note: Bittensor's config system will automatically parse --miner.model_name
     # and --miner.league from command line arguments
@@ -549,12 +865,29 @@ if __name__ == "__main__":
         print(" [MINER] Loading model...")
         miner.load_model()
         
-        # Start mining loop (polls API for tasks)
-        print(" [MINER] Starting mining loop (polling validator API)...")
-        print(" [MINER] Press Ctrl+C to stop\n")
-        
-        try:
-            miner._run_mining_loop()
-        except KeyboardInterrupt:
-            print("\n [MINER] Shutting down...")
-            miner.should_exit = True
+        # Run based on mode
+        if args.mode == "quasar":
+            print(f" [MINER] Starting Quasar optimization mode (interval: {args.quasar_interval}s)...")
+            print(f" [MINER] Press Ctrl+C to stop\n")
+            
+            try:
+                while not miner.should_exit:
+                    # Run Quasar optimization
+                    success = miner.run_quasar_optimization()
+                    
+                    # Wait before next optimization
+                    print(f"\n[QUASAR] Waiting {args.quasar_interval}s before next optimization...", flush=True)
+                    time.sleep(args.quasar_interval)
+            except KeyboardInterrupt:
+                print("\n [MINER] Shutting down...")
+                miner.should_exit = True
+        else:
+            # Start mining loop (polls API for tasks)
+            print(" [MINER] Starting mining loop (polling validator API)...")
+            print(" [MINER] Press Ctrl+C to stop\n")
+            
+            try:
+                miner._run_mining_loop()
+            except KeyboardInterrupt:
+                print("\n [MINER] Shutting down...")
+                miner.should_exit = True
