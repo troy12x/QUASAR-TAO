@@ -259,6 +259,14 @@ def register_miner(
         tasks_completed=0
     )
     db.add(new_score)
+
+    # Create MinerRegistration entry
+    new_registration = models.MinerRegistration(
+        hotkey=hotkey,
+        uid=0  # Will be updated when miner is found on metagraph
+    )
+    db.add(new_registration)
+
     db.commit()
 
     print(f"✅ [REGISTER] Miner {hotkey[:8]} registered for {req.model_name} in {req.league}")
