@@ -303,6 +303,13 @@ Requirements:
             max_length=self.max_length,
         ).to(self.device)
 
+        input_length = model_inputs.input_ids.shape[1]
+        print(f"[MINER] Input length: {input_length} tokens", flush=True)
+        print(f"[MINER] Starting generation (max_new_tokens=1024)...", flush=True)
+
+        import time
+        start_time = time.time()
+
         with torch.no_grad():
             generated_ids = self.model.generate(
                 model_inputs.input_ids,
@@ -314,9 +321,19 @@ Requirements:
                 pad_token_id=self.tokenizer.eos_token_id,
             )
 
+        end_time = time.time()
+        generation_time = end_time - start_time
+
         generated_ids = [
             output_ids[len(input_ids) :] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
         ]
+        output_length = generated_ids[0].shape[0]
+        tokens_per_sec = output_length / generation_time if generation_time > 0 else 0
+
+        print(f"[MINER] Generated {output_length} tokens in {generation_time:.2f}s", flush=True)
+        print(f"[MINER] Speed: {tokens_per_sec:.2f} tokens/sec", flush=True)
+        print(f"[MINER] Device: {self.device}", flush=True)
+
         code = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
         preview = code.replace("\n", " ")
