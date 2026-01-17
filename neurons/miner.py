@@ -272,7 +272,7 @@ class Miner(BaseMinerNeuron):
             # Fetch and display task stats
             task_stats = self._fetch_task_stats()
             if task_stats:
-                print(f"[MINER] System Stats: Total={task_stats.get('total_tasks', 0)} | Completed={task_stats.get('completed_tasks', 0)} | Pending={task_stats.get('pending_tasks', 0)} | Active={task_stats.get('active_assignments', 0)}", flush=True)
+                print(f"[MINER] System Stats: Total={task_stats.get('total_tasks_in_dataset', 0)} | Completed={task_stats.get('completed_tasks', 0)} | Pending={task_stats.get('pending_tasks', 0)} | Active={task_stats.get('active_assignments', 0)}", flush=True)
 
             # Fetch task from API
             task = self._fetch_task_from_api()
