@@ -1,23 +1,19 @@
 # The MIT License (MIT)
-# Copyright © 2026 SILX INC
+# Copyright 2026 SILX INC
 
 import os
 import sys
 import time
 import asyncio
-import json
 import subprocess
 import tempfile
-import uuid
 import torch
 import numpy as np
 import bittensor as bt
-import random
 import traceback
 import requests
-import ast
 import shutil
-from typing import List, Dict, Union, Optional, Any
+from typing import List, Dict, Optional
 
 # Add the parent directory to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -29,12 +25,7 @@ import quasar
 from quasar.base.validator import BaseValidatorNeuron
 
 # --- Constants ---
-CHALLENGE_URL = os.getenv("CHALLENGE_URL", "http://localhost:8080")
 VALIDATOR_API_URL = os.getenv("VALIDATOR_API_URL", "https://quasar-subnet.onrender.com")
-TIMEOUT_SECS = 300
-EVALUATION_DELAY = 3.0  # Delay between miner evaluations (seconds)
-EXECUTION_TIMEOUT = 30  # Docker execution timeout
-CODE_RUNNER_PORT = 8765
 
 class PerformanceValidator:
     """Validates miner performance claims by cloning repos and running tests."""
@@ -284,10 +275,6 @@ class Validator(BaseValidatorNeuron):
             self._polling_interval_seconds = polling_interval
         bt.logging.info(f"⏱️ Polling interval: {polling_interval}s ({polling_interval/60:.1f} minutes)")
         
-        # Initialize Docker executor for local execution
-        self.docker_executor = DockerExecutor()
-        bt.logging.info("🐳 Docker executor initialized (local execution)")
-        
         # Initialize PerformanceValidator for speed optimization validation
         self.performance_validator = PerformanceValidator()
         bt.logging.info("⚡ Performance validator initialized")
@@ -296,190 +283,7 @@ class Validator(BaseValidatorNeuron):
         self.scores = torch.zeros(self.metagraph.n, dtype=torch.float32, device=self.device)
         self.load_state()
         
-        # Cache for API scores (refreshed each cycle)
-        self.api_scores_cache = {}
-        self.last_api_fetch = 0
-        self.api_cache_ttl = 60  # Cache for 60 seconds
-
-        self.api_league = os.getenv("VALIDATOR_LEAGUE")
-        self.api_model_name = os.getenv("VALIDATOR_MODEL_NAME")
-        
         bt.logging.info(f"📡 Validator API URL: {VALIDATOR_API_URL}")
-
-    def fetch_api_scores(self) -> Dict[str, float]:
-        """Fetch all scores from validator_api and cache them."""
-        current_time = time.time()
-        
-        # Return cached scores if still valid
-        if current_time - self.last_api_fetch < self.api_cache_ttl:
-            print(f"[VALIDATOR] Using cached scores (age={current_time - self.last_api_fetch:.1f}s)", flush=True)
-            return self.api_scores_cache
-        
-        print(f"[VALIDATOR] Fetching fresh scores from API...", flush=True)
-        
-        try:
-            params = {}
-            if self.api_league:
-                params["league"] = self.api_league
-            if self.api_model_name:
-                params["model_name"] = self.api_model_name
-
-            response = requests.get(
-                f"{VALIDATOR_API_URL}/get_scores",
-                params=params,
-                timeout=30
-            )
-            response.raise_for_status()
-            
-            scores = response.json()
-            self.api_scores_cache = {s.get("hotkey"): s.get("score", 0.0) for s in scores}
-            self.last_api_fetch = current_time
-            
-            print(f"[VALIDATOR] Cached {len(self.api_scores_cache)} miner scores", flush=True)
-            return self.api_scores_cache
-            
-        except Exception as e:
-            print(f"[VALIDATOR] ⚠️ Failed to fetch scores: {e}", flush=True)
-            bt.logging.warning(f"Failed to fetch scores from API: {e}")
-            return self.api_scores_cache  # Return stale cache if fetch fails
-
-    def _infer_function_name(self, code: str) -> str:
-        try:
-            tree = ast.parse(code or "")
-            fn_names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
-            if "solve" in fn_names:
-                return "solve"
-            for preferred in ("main", "solution"):
-                if preferred in fn_names:
-                    return preferred
-            if len(fn_names) == 1:
-                return fn_names[0]
-            if len(fn_names) > 1:
-                return fn_names[0]
-        except Exception:
-            pass
-        return "solve"
-
-    def evaluate_submissions_locally(self) -> Dict[str, float]:
-        """Fetch pending submissions from API and evaluate them locally using Docker.
-        
-        Returns:
-            Dictionary mapping miner_hotkey to score (0.0 to 1.0).
-        """
-        print(f"[VALIDATOR] 🐳 Evaluating submissions locally with Docker...", flush=True)
-        bt.logging.info("🐳 Evaluating submissions locally with Docker...")
-        
-        evaluated_scores = {}  # hotkey -> score
-        
-        try:
-            # Fetch pending submissions from API
-            print(f"[VALIDATOR] Fetching from: {VALIDATOR_API_URL}/get_pending_submissions", flush=True)
-            response = requests.get(
-                f"{VALIDATOR_API_URL}/get_pending_submissions",
-                params={"limit": 10},
-                timeout=30
-            )
-            print(f"[VALIDATOR] Response status: {response.status_code}", flush=True)
-            response.raise_for_status()
-            
-            submissions = response.json()
-            print(f"[VALIDATOR] Found {len(submissions)} pending submissions", flush=True)
-            bt.logging.info(f"Found {len(submissions)} pending submissions")
-            
-            if not submissions:
-                print("[VALIDATOR] No pending submissions to evaluate", flush=True)
-                return
-            
-            for submission in submissions:
-                result_id = str(submission["id"])
-                task_id = submission["task_id"]
-                code = submission["response_text"]
-                miner_hotkey = submission["miner_hotkey"]
-                
-                function_name = self._infer_function_name(code)
-                print(f"[VALIDATOR] Evaluating submission {result_id[:8]} (fn={function_name})...", flush=True)
-                
-                # Fetch task details to get test cases
-                task_response = requests.get(
-                    f"{VALIDATOR_API_URL}/get_task/{task_id}",
-                    timeout=30
-                )
-                
-                if task_response.status_code != 200:
-                    print(f"[VALIDATOR] ⚠️ Failed to fetch task {task_id}, skipping submission", flush=True)
-                    continue
-                
-                task_data = task_response.json()
-                test_cases = task_data.get("test_cases", [])
-                
-                if not isinstance(test_cases, list) or not test_cases:
-                    print(f"[VALIDATOR] ⚠️ No test cases for task {task_id}, skipping submission", flush=True)
-                    continue
-                
-                # Evaluate code against test cases using Docker
-                passed = 0
-                total = len(test_cases)
-                docker_failed = False
-                
-                # Start container once for all test cases
-                print(f"[VALIDATOR] Starting container for {total} test cases...", flush=True)
-                start_result = self.docker_executor.start_container(code, function_name)
-                if not start_result.get("success"):
-                    print(f"[VALIDATOR] ⚠️ Failed to start container: {start_result.get('error')}, skipping submission", flush=True)
-                    continue
-                
-                try:
-                    for test_case in test_cases:
-                        test_input = test_case.get("input_code", "")
-                        expected_output = test_case.get("expected_output")
-                        
-                        # Execute in running container
-                        result = self.docker_executor.execute_in_container(
-                            function_name=function_name,
-                            test_input=test_input
-                        )
-                        
-                        if not result.get("success"):
-                            print(f"[VALIDATOR] ⚠️ Docker execution failed: {result.get('error')}, skipping submission", flush=True)
-                            docker_failed = True
-                            break
-                        
-                        if str(result.get("output")) == str(expected_output):
-                            passed += 1
-                finally:
-                    # Stop container after all test cases
-                    self.docker_executor.stop_container()
-                
-                # Skip if Docker failed
-                if docker_failed:
-                    print(f"[VALIDATOR] Skipping submission {result_id[:8]} due to Docker failure", flush=True)
-                    continue
-                
-                # Calculate score
-                score = passed / total if total > 0 else 0.0
-                print(f"[VALIDATOR] Score: {passed}/{total} = {score:.4f}", flush=True)
-                
-                # Update score in API
-                update_response = requests.post(
-                    f"{VALIDATOR_API_URL}/update_score",
-                    json={"result_id": result_id, "score": score},
-                    timeout=30
-                )
-                update_response.raise_for_status()
-                
-                print(f"[VALIDATOR] ✅ Updated score for {miner_hotkey[:12]}...", flush=True)
-                evaluated_scores[miner_hotkey] = score
-            
-            if evaluated_scores:
-                print(f"[VALIDATOR] ✅ Evaluated {len(evaluated_scores)} submissions", flush=True)
-            else:
-                print(f"[VALIDATOR] ⚠️ No submissions were evaluated", flush=True)
-                
-        except Exception as e:
-            print(f"[VALIDATOR] ⚠️ Failed to evaluate submissions: {e}", flush=True)
-            bt.logging.warning(f"Failed to evaluate submissions: {e}")
-        
-        return evaluated_scores
 
     def evaluate_performance_submissions(self) -> Dict[str, float]:
         """Evaluate performance submissions by cloning repos and running tests.
@@ -560,14 +364,14 @@ class Validator(BaseValidatorNeuron):
             bt.logging.error(f"❌ Failed to save state: {e}")
 
     async def forward(self):
-        """Main validation loop - evaluate pending submissions locally with Docker and submit weights."""
+        """Main validation loop - validate speed submissions by cloning miner repos and running performance tests."""
         print("[VALIDATOR] ➡️ Starting validation cycle...", flush=True)
         bt.logging.info("➡️ Starting validation cycle...")
 
         try:
-            # Evaluate pending submissions locally with Docker
-            print("[VALIDATOR] 🐳 Evaluating pending submissions locally...", flush=True)
-            evaluated_scores = self.evaluate_submissions_locally()
+            # Evaluate performance submissions
+            print("[VALIDATOR] ⚡ Evaluating performance submissions...", flush=True)
+            evaluated_scores = self.evaluate_performance_submissions()
             
             # If no submissions were evaluated, wait before next cycle
             if not evaluated_scores:
