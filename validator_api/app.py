@@ -138,46 +138,63 @@ def submit_kernel(
     Submit kernel optimization results from miners.
     Stores fork URL, commit hash, performance metrics, and signature.
     """
-    print(f"📥 [SUBMIT_KERNEL] Miner: {req.miner_hotkey[:8]} | Fork: {req.fork_url}")
-    print(f"📥 [SUBMIT_KERNEL] Commit: {req.commit_hash[:12]}... | Performance: {req.tokens_per_sec:.2f} tokens/sec")
-    if req.vram_mb is not None:
-        print(f"📥 [SUBMIT_KERNEL] VRAM_MB: {req.vram_mb:.2f}")
-    if req.benchmarks is not None:
-        try:
-            print(f"📥 [SUBMIT_KERNEL] Benchmarks: {len(req.benchmarks)} seq lengths")
-        except Exception:
-            print(f"📥 [SUBMIT_KERNEL] Benchmarks: (unprintable)")
+    import traceback
+    try:
+        print(f"📥 [SUBMIT_KERNEL] Miner: {req.miner_hotkey[:8]} | Fork: {req.fork_url}")
+        print(f"📥 [SUBMIT_KERNEL] Commit: {req.commit_hash[:12]}... | Performance: {req.tokens_per_sec:.2f} tokens/sec")
+        if req.vram_mb is not None:
+            print(f"📥 [SUBMIT_KERNEL] VRAM_MB: {req.vram_mb:.2f}")
+        if req.benchmarks is not None:
+            try:
+                print(f"📥 [SUBMIT_KERNEL] Benchmarks: {len(req.benchmarks)} seq lengths")
+            except Exception:
+                print(f"📥 [SUBMIT_KERNEL] Benchmarks: (unprintable)")
 
-    # Verify the hotkey matches the authenticated miner
-    if req.miner_hotkey != hotkey:
-        raise HTTPException(status_code=403, detail="Hotkey mismatch")
+        # Verify the hotkey matches the authenticated miner
+        if req.miner_hotkey != hotkey:
+            raise HTTPException(status_code=403, detail="Hotkey mismatch")
 
-    # Check if miner is registered
-    miner_reg = db.query(models.MinerRegistration).filter(
-        models.MinerRegistration.hotkey == hotkey
-    ).first()
+        # Check if miner is registered
+        miner_reg = db.query(models.MinerRegistration).filter(
+            models.MinerRegistration.hotkey == hotkey
+        ).first()
 
-    if not miner_reg:
-        raise HTTPException(status_code=404, detail="Miner not registered")
-    
-    # Create new speed submission
-    new_submission = models.SpeedSubmission(
-        miner_hotkey=req.miner_hotkey,
-        miner_uid=miner_reg.uid,
-        fork_url=req.fork_url,
-        commit_hash=req.commit_hash,
-        target_sequence_length=req.target_sequence_length,
-        tokens_per_sec=req.tokens_per_sec,
-        vram_mb=req.vram_mb,
-        benchmarks=json.dumps(req.benchmarks) if req.benchmarks else None,
-        signature=req.signature
-    )
-    
-    db.add(new_submission)
-    db.commit()
-    db.refresh(new_submission)
-    
-    print(f"✅ [SUBMIT_OPT] Submission saved with ID: {new_submission.id}")
+        if not miner_reg:
+            raise HTTPException(status_code=404, detail="Miner not registered")
+
+        # Create new speed submission
+        new_submission = models.SpeedSubmission(
+            miner_hotkey=req.miner_hotkey,
+            miner_uid=miner_reg.uid,
+            fork_url=req.fork_url,
+            commit_hash=req.commit_hash,
+            target_sequence_length=req.target_sequence_length,
+            tokens_per_sec=req.tokens_per_sec,
+            vram_mb=req.vram_mb,
+            benchmarks=json.dumps(req.benchmarks) if req.benchmarks else None,
+            signature=req.signature
+        )
+
+        db.add(new_submission)
+        db.commit()
+        db.refresh(new_submission)
+
+        print(f"✅ [SUBMIT_OPT] Submission saved with ID: {new_submission.id}")
+        return models.SpeedSubmissionResponse(
+            submission_id=new_submission.id,
+            miner_hotkey=new_submission.miner_hotkey,
+            fork_url=new_submission.fork_url,
+            commit_hash=new_submission.commit_hash,
+            target_sequence_length=new_submission.target_sequence_length,
+            tokens_per_sec=new_submission.tokens_per_sec,
+            created_at=new_submission.created_at
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [SUBMIT_KERNEL] Error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
     
     return models.SpeedSubmissionResponse(
         submission_id=new_submission.id,
