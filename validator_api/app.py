@@ -12,6 +12,7 @@ import random
 import time
 import hashlib
 import requests
+import json
 from collections import defaultdict
 
 # Add parent directory to path to import quasar
