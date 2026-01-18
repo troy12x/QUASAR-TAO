@@ -25,4 +25,4 @@ COPY validator_api /app/validator_api
 EXPOSE 8000
 
 # Run the application
-CMD ["uvicorn", "validator_api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "rm -f /app/quasar.db && uvicorn validator_api.app:app --host 0.0.0.0 --port 8000"]
