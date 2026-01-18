@@ -29,6 +29,22 @@ from fastapi.middleware.cors import CORSMiddleware
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
 
+# Add new columns if they don't exist (migration)
+from sqlalchemy import text
+with engine.connect() as conn:
+    # Check if vram_mb column exists
+    result = conn.execute(text("PRAGMA table_info(speed_submissions)"))
+    columns = [row[1] for row in result]
+    if "vram_mb" not in columns:
+        conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN vram_mb REAL"))
+        conn.commit()
+    if "benchmarks" not in columns:
+        conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN benchmarks TEXT"))
+        conn.commit()
+    if "validated" not in columns:
+        conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN validated BOOLEAN DEFAULT 0"))
+        conn.commit()
+
 app = FastAPI(title="Quasar Validator API")
 
 app.add_middleware(
