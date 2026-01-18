@@ -64,7 +64,10 @@ class SpeedSubmission(Base):
     commit_hash = Column(String)
     target_sequence_length = Column(Integer)
     tokens_per_sec = Column(Float)
+    vram_mb = Column(Float, nullable=True)
+    benchmarks = Column(String, nullable=True)  # JSON string of benchmarks
     signature = Column(String)
+    validated = Column(Boolean, default=False)  # Track if submission has been validated
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class TaskAssignment(Base):

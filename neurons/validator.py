@@ -248,45 +248,85 @@ if __name__ == "__main__":
         commit_hash = submission.get("commit_hash")
         claimed_performance = submission.get("tokens_per_sec")
         target_sequence_length = submission.get("target_sequence_length", 100000)
-        
+        claimed_benchmarks_json = submission.get("benchmarks")
+
+        # Parse claimed benchmarks if available
+        claimed_benchmarks = {}
+        if claimed_benchmarks_json:
+            try:
+                claimed_benchmarks = json.loads(claimed_benchmarks_json)
+            except Exception as e:
+                print(f"[VALIDATOR] Failed to parse benchmarks: {e}")
+
         print(f"\n[VALIDATOR] Validating submission: {submission.get('id')}")
         print(f"  Fork URL: {fork_url}")
         print(f"  Commit: {commit_hash}")
-        print(f"  Claimed performance: {claimed_performance:.2f} tokens/sec")
-        
+        print(f"  Claimed performance: {claimed_performance:.2f} tokens/sec @ seq_len={target_sequence_length}")
+        if claimed_benchmarks:
+            print(f"  Claimed benchmarks:")
+            for seq_len, metrics in claimed_benchmarks.items():
+                print(f"    {seq_len}: {metrics.get('tokens_per_sec', 0):.2f} tokens/sec | VRAM: {metrics.get('vram_mb', 0):.2f} MB")
+
         try:
             # Clone the repository
             repo_path = self.clone_miner_repo(fork_url)
 
             if commit_hash:
                 self.checkout_commit(repo_path, commit_hash)
-            
-            seq_lengths = sorted(set([512, 1024, 2048, int(target_sequence_length)]))
+
+            # Run benchmarks for all reported sequence lengths
+            seq_lengths_to_test = sorted(set([512, 1024, 2048, int(target_sequence_length)]))
+            if claimed_benchmarks:
+                seq_lengths_to_test = sorted(set(list(claimed_benchmarks.keys()) + [int(target_sequence_length)]))
+
             results_by_seq_len: Dict[int, Dict[str, float]] = {}
-            for seq_len in seq_lengths:
+            for seq_len in seq_lengths_to_test:
                 results_by_seq_len[seq_len] = self.run_performance_test(repo_path, seq_len)
 
             target_results = results_by_seq_len.get(int(target_sequence_length), {"tokens_per_sec": 0.0, "vram_mb": 0.0})
             actual_performance = float(target_results.get("tokens_per_sec", 0.0))
-            
-            # Verify performance
-            is_valid = self.verify_performance(claimed_performance, actual_performance)
-            
+
+            # Calculate score: higher actual = higher rewards, lower actual = zero
+            # If actual >= claimed * 0.9, give full reward (10% tolerance)
+            # If actual < claimed * 0.9, give zero reward
+            tolerance = 0.9  # 90% of claimed
+            score = 0.0
+            if actual_performance >= claimed_performance * tolerance:
+                # Bonus for exceeding claimed performance
+                score = 1.0 + (actual_performance - claimed_performance) / claimed_performance
+            else:
+                # Below tolerance, zero reward
+                score = 0.0
+
+            print(f"[VALIDATOR] Performance verification:")
+            print(f"  Claimed: {claimed_performance:.2f} tokens/sec @ seq_len={target_sequence_length}")
+            print(f"  Actual: {actual_performance:.2f} tokens/sec @ seq_len={target_sequence_length}")
+            print(f"  Difference: {(actual_performance - claimed_performance) / claimed_performance * 100:.2f}%")
+            print(f"  Score: {score:.4f} (higher actual = higher rewards)")
+
+            # Compare all reported sequence lengths
+            print(f"[VALIDATOR] Benchmark comparison:")
+            for seq_len in sorted(claimed_benchmarks.keys()) if claimed_benchmarks else []:
+                claimed = claimed_benchmarks.get(seq_len, {}).get("tokens_per_sec", 0)
+                actual = results_by_seq_len.get(seq_len, {}).get("tokens_per_sec", 0)
+                diff = (actual - claimed) / claimed * 100 if claimed > 0 else 0
+                print(f"  {seq_len}: claimed={claimed:.2f}, actual={actual:.2f}, diff={diff:.2f}%")
+
             # Clean up
             if os.path.exists(repo_path):
                 shutil.rmtree(repo_path)
-            
+
             return {
                 "submission_id": submission.get("id"),
                 "miner_hotkey": submission.get("miner_hotkey"),
                 "claimed_performance": claimed_performance,
                 "actual_performance": actual_performance,
                 "results_by_seq_len": results_by_seq_len,
-                "is_valid": is_valid,
+                "score": score,
                 "fork_url": fork_url,
                 "commit_hash": commit_hash
             }
-            
+
         except Exception as e:
             print(f"[VALIDATOR] Validation failed: {e}")
             traceback.print_exc()
@@ -295,7 +335,7 @@ if __name__ == "__main__":
                 "miner_hotkey": submission.get("miner_hotkey"),
                 "claimed_performance": claimed_performance,
                 "actual_performance": 0.0,
-                "is_valid": False,
+                "score": 0.0,
                 "error": str(e)
             }
     
@@ -336,52 +376,67 @@ class Validator(BaseValidatorNeuron):
 
     def evaluate_performance_submissions(self) -> Dict[str, float]:
         """Evaluate performance submissions by cloning repos and running tests.
-        
+
         Returns:
             Dictionary mapping miner_hotkey to score (0.0 to 1.0).
         """
         print(f"[VALIDATOR] ⚡ Evaluating performance submissions...", flush=True)
         bt.logging.info("⚡ Evaluating performance submissions...")
-        
+
         evaluated_scores = {}  # hotkey -> score
-        
+
         try:
             # Fetch pending submissions from API
             submissions = self.performance_validator.fetch_pending_submissions(limit=5)
-            
+
             if not submissions:
                 print("[VALIDATOR] No performance submissions to evaluate", flush=True)
                 return evaluated_scores
-            
+
             print(f"[VALIDATOR] Found {len(submissions)} performance submissions", flush=True)
-            
+
             for submission in submissions:
+                # Skip already validated submissions
+                if submission.get("validated", False):
+                    continue
+
                 # Validate the submission
                 result = self.performance_validator.validate_submission(submission)
-                
+
                 miner_hotkey = result.get("miner_hotkey")
-                is_valid = result.get("is_valid", False)
-                actual_performance = result.get("actual_performance", 0.0)
-                
-                # Score based on validity and performance
-                if is_valid:
-                    # Normalize performance to score (higher is better)
-                    # Assuming max reasonable performance is around 200,000 tokens/sec
-                    score = min(actual_performance / 200000.0, 1.0)
-                    print(f"[VALIDATOR] ✅ Valid submission from {miner_hotkey[:12]}... - Score: {score:.4f}", flush=True)
-                    evaluated_scores[miner_hotkey] = score
+                score = result.get("score", 0.0)
+
+                # Use the score from validate_submission (already calculated)
+                # Normalize to 0-1 range (assuming max reasonable score is around 2.0)
+                normalized_score = min(score / 2.0, 1.0)
+
+                if score > 0:
+                    print(f"[VALIDATOR] ✅ Valid submission from {miner_hotkey[:12]}... - Score: {score:.4f} (normalized: {normalized_score:.4f})", flush=True)
+                    evaluated_scores[miner_hotkey] = normalized_score
                 else:
                     print(f"[VALIDATOR] ❌ Invalid submission from {miner_hotkey[:12]}...", flush=True)
                     evaluated_scores[miner_hotkey] = 0.0
-            
+
+                # Mark submission as validated in API
+                submission_id = submission.get("id")
+                if submission_id:
+                    try:
+                        requests.post(
+                            f"{VALIDATOR_API_URL}/mark_validated",
+                            json={"submission_id": submission_id},
+                            timeout=30
+                        )
+                    except Exception as e:
+                        print(f"[VALIDATOR] Failed to mark submission as validated: {e}", flush=True)
+
             if evaluated_scores:
                 print(f"[VALIDATOR] ✅ Evaluated {len(evaluated_scores)} performance submissions", flush=True)
-                
+
         except Exception as e:
             print(f"[VALIDATOR] ⚠️ Failed to evaluate performance submissions: {e}", flush=True)
             bt.logging.warning(f"Failed to evaluate performance submissions: {e}")
             traceback.print_exc()
-        
+
         return evaluated_scores
 
     def load_state(self):

@@ -133,6 +133,8 @@ def submit_kernel(
         commit_hash=req.commit_hash,
         target_sequence_length=req.target_sequence_length,
         tokens_per_sec=req.tokens_per_sec,
+        vram_mb=req.vram_mb,
+        benchmarks=json.dumps(req.benchmarks) if req.benchmarks else None,
         signature=req.signature
     )
     
@@ -160,25 +162,27 @@ def get_submission_stats(
     """
     Get submission statistics for the system.
     Returns recent submissions with performance metrics.
+    Only returns unvalidated submissions for validator to process.
     """
-    # Get recent submissions
+    # Get recent unvalidated submissions
     recent_submissions = (
         db.query(models.SpeedSubmission)
+        .filter(models.SpeedSubmission.validated == False)
         .order_by(models.SpeedSubmission.created_at.desc())
         .limit(limit)
         .all()
     )
-    
+
     # Calculate stats
     total_submissions = db.query(models.SpeedSubmission).count()
-    
+
     if recent_submissions:
         avg_tokens_per_sec = sum(s.tokens_per_sec for s in recent_submissions) / len(recent_submissions)
         max_tokens_per_sec = max(s.tokens_per_sec for s in recent_submissions)
         min_tokens_per_sec = min(s.tokens_per_sec for s in recent_submissions)
     else:
         avg_tokens_per_sec = max_tokens_per_sec = min_tokens_per_sec = 0.0
-    
+
     # Get top performers
     top_submissions = (
         db.query(models.SpeedSubmission)
@@ -186,7 +190,7 @@ def get_submission_stats(
         .limit(10)
         .all()
     )
-    
+
     return {
         "total_submissions": total_submissions,
         "recent_submissions": [
@@ -197,6 +201,9 @@ def get_submission_stats(
                 "commit_hash": s.commit_hash,
                 "target_sequence_length": s.target_sequence_length,
                 "tokens_per_sec": s.tokens_per_sec,
+                "vram_mb": s.vram_mb,
+                "benchmarks": json.loads(s.benchmarks) if s.benchmarks else None,
+                "validated": s.validated,
                 "created_at": s.created_at.isoformat()
             }
             for s in recent_submissions
@@ -222,6 +229,28 @@ def get_submission_stats(
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.post("/mark_validated")
+def mark_validated(
+    req: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Mark a submission as validated.
+    Used by validators to avoid re-evaluating the same submission.
+    """
+    submission_id = req.get("submission_id")
+    if not submission_id:
+        raise HTTPException(status_code=400, detail="submission_id required")
+
+    submission = db.query(models.SpeedSubmission).filter(models.SpeedSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    submission.validated = True
+    db.commit()
+
+    return {"status": "ok", "submission_id": submission_id}
 
 @app.post("/register_miner")
 def register_miner(
