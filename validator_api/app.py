@@ -32,18 +32,37 @@ models.Base.metadata.create_all(bind=engine)
 # Add new columns if they don't exist (migration)
 from sqlalchemy import text
 with engine.connect() as conn:
-    # Check if vram_mb column exists
-    result = conn.execute(text("PRAGMA table_info(speed_submissions)"))
-    columns = [row[1] for row in result]
-    if "vram_mb" not in columns:
-        conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN vram_mb REAL"))
-        conn.commit()
-    if "benchmarks" not in columns:
-        conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN benchmarks TEXT"))
-        conn.commit()
-    if "validated" not in columns:
-        conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN validated BOOLEAN DEFAULT 0"))
-        conn.commit()
+    # Check database type
+    db_type = conn.execute(text("SELECT current_database()")).scalar()
+    if "postgresql" in str(engine.url):
+        # PostgreSQL: use information_schema
+        result = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'speed_submissions'
+        """))
+        columns = [row[0] for row in result]
+        if "vram_mb" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN vram_mb REAL"))
+            conn.commit()
+        if "benchmarks" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN benchmarks TEXT"))
+            conn.commit()
+        if "validated" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN validated BOOLEAN DEFAULT FALSE"))
+            conn.commit()
+    else:
+        # SQLite: use PRAGMA
+        result = conn.execute(text("PRAGMA table_info(speed_submissions)"))
+        columns = [row[1] for row in result]
+        if "vram_mb" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN vram_mb REAL"))
+            conn.commit()
+        if "benchmarks" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN benchmarks TEXT"))
+            conn.commit()
+        if "validated" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN validated BOOLEAN DEFAULT 0"))
+            conn.commit()
 
 app = FastAPI(title="Quasar Validator API")
 
