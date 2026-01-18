@@ -1,7 +1,6 @@
 services:
   # Validator API (already deployed at quasar-subnet.onrender.com)
   - type: web
-    name: quasar-validator-api
     env: docker
     dockerfilePath: ./Dockerfile
     plan: free
