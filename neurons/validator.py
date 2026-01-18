@@ -16,6 +16,7 @@ import random
 import traceback
 import requests
 import ast
+import shutil
 from typing import List, Dict, Union, Optional, Any
 
 # Add the parent directory to path
@@ -34,6 +35,235 @@ TIMEOUT_SECS = 300
 EVALUATION_DELAY = 3.0  # Delay between miner evaluations (seconds)
 EXECUTION_TIMEOUT = 30  # Docker execution timeout
 CODE_RUNNER_PORT = 8765
+
+class PerformanceValidator:
+    """Validates miner performance claims by cloning repos and running tests."""
+    
+    def __init__(self):
+        self.validator_api_url = VALIDATOR_API_URL
+        self.temp_dir = tempfile.mkdtemp(prefix="quasar_validator_")
+        print(f"[VALIDATOR] Initialized with temp dir: {self.temp_dir}")
+    
+    def fetch_pending_submissions(self, limit: int = 10) -> List[Dict]:
+        """Fetch pending submissions from validator API."""
+        try:
+            response = requests.get(
+                f"{self.validator_api_url}/get_submission_stats",
+                params={"limit": limit},
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Filter for submissions that haven't been validated yet
+            # For now, we'll return all recent submissions
+            return data.get("recent_submissions", [])
+        except Exception as e:
+            print(f"[VALIDATOR] Error fetching submissions: {e}")
+            return []
+    
+    def clone_miner_repo(self, fork_url: str) -> str:
+        """Clone miner's fork repository to temporary directory."""
+        repo_name = fork_url.split("/")[-1].replace(".git", "")
+        repo_path = os.path.join(self.temp_dir, repo_name)
+        
+        if os.path.exists(repo_path):
+            shutil.rmtree(repo_path)
+        
+        print(f"[VALIDATOR] Cloning repo: {fork_url}")
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", fork_url, repo_path],
+                check=True,
+                capture_output=True,
+                timeout=120
+            )
+            print(f"[VALIDATOR] Repo cloned to: {repo_path}")
+            return repo_path
+        except subprocess.TimeoutExpired:
+            print(f"[VALIDATOR] Clone timeout for {fork_url}")
+            raise
+        except subprocess.CalledProcessError as e:
+            print(f"[VALIDATOR] Clone failed: {e.stderr}")
+            raise
+    
+    def run_performance_test(self, repo_path: str, sequence_length: int = 100000) -> float:
+        """Run performance test on cloned repository."""
+        test_script = os.path.join(repo_path, "test_quasar_attention.py")
+        
+        if not os.path.exists(test_script):
+            print(f"[VALIDATOR] Test script not found: {test_script}")
+            return 0.0
+        
+        print(f"[VALIDATOR] Running performance test...")
+        
+        # Create temporary test script with target sequence length
+        temp_test_script = os.path.join(repo_path, "test_temp.py")
+        with open(temp_test_script, 'w') as f:
+            f.write(f"""
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Enable verbose logging for Triton kernel compilation
+os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
+os.environ["TRITON_PRINT_DEBUG"] = "1"
+
+import torch
+from fla.layers.quasar import QuasarAttention
+
+def test_quasar():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    batch_size = 1
+    seq_len = {sequence_length}
+    hidden_size = 512
+    head_dim = 64
+    num_heads = 8
+    
+    quasar = QuasarAttention(
+        hidden_size=hidden_size,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        mode="chunk",
+        use_short_conv=True,
+    ).to(device)
+    
+    x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+    
+    # Warmup
+    for _ in range(3):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
+            _ = quasar(x)
+    
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    
+    # Benchmark
+    import time
+    num_runs = 10
+    start = time.time()
+    
+    for _ in range(num_runs):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
+            _ = quasar(x)
+    
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    
+    elapsed = time.time() - start
+    tokens_per_sec = (batch_size * seq_len * num_runs) / elapsed
+    
+    print(f"RESULT: {{tokens_per_sec:.2f}}")
+    return tokens_per_sec
+
+if __name__ == "__main__":
+    tps = test_quasar()
+    print(f"Tokens/sec: {{tps:.2f}}")
+""")
+        
+        try:
+            result = subprocess.run(
+                [sys.executable, temp_test_script],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            output = result.stdout + result.stderr
+            
+            # Extract tokens/sec from output
+            for line in output.split('\n'):
+                if "RESULT:" in line:
+                    tokens_per_sec = float(line.split("RESULT:")[1].strip())
+                    print(f"[VALIDATOR] Test result: {tokens_per_sec:.2f} tokens/sec")
+                    return tokens_per_sec
+            
+            print(f"[VALIDATOR] Could not parse test results: {output}")
+            return 0.0
+            
+        except subprocess.TimeoutExpired:
+            print(f"[VALIDATOR] Test timed out (300s)")
+            return 0.0
+        except Exception as e:
+            print(f"[VALIDATOR] Test failed: {e}")
+            return 0.0
+        finally:
+            # Clean up temp test script
+            if os.path.exists(temp_test_script):
+                os.remove(temp_test_script)
+    
+    def verify_performance(self, claimed: float, actual: float, tolerance: float = 0.1) -> bool:
+        """Verify if actual performance is close to claimed performance."""
+        if actual <= 0:
+            return False
+        
+        # Calculate percentage difference
+        diff = abs(claimed - actual) / claimed
+        is_valid = diff <= tolerance
+        
+        print(f"[VALIDATOR] Performance verification:")
+        print(f"  Claimed: {claimed:.2f} tokens/sec")
+        print(f"  Actual: {actual:.2f} tokens/sec")
+        print(f"  Difference: {diff:.2%}")
+        print(f"  Valid: {is_valid}")
+        
+        return is_valid
+    
+    def validate_submission(self, submission: Dict) -> Dict:
+        """Validate a single submission."""
+        fork_url = submission.get("fork_url")
+        commit_hash = submission.get("commit_hash")
+        claimed_performance = submission.get("tokens_per_sec")
+        target_sequence_length = submission.get("target_sequence_length", 100000)
+        
+        print(f"\n[VALIDATOR] Validating submission: {submission.get('id')}")
+        print(f"  Fork URL: {fork_url}")
+        print(f"  Commit: {commit_hash}")
+        print(f"  Claimed performance: {claimed_performance:.2f} tokens/sec")
+        
+        try:
+            # Clone the repository
+            repo_path = self.clone_miner_repo(fork_url)
+            
+            # Run performance test
+            actual_performance = self.run_performance_test(repo_path, target_sequence_length)
+            
+            # Verify performance
+            is_valid = self.verify_performance(claimed_performance, actual_performance)
+            
+            # Clean up
+            if os.path.exists(repo_path):
+                shutil.rmtree(repo_path)
+            
+            return {
+                "submission_id": submission.get("id"),
+                "miner_hotkey": submission.get("miner_hotkey"),
+                "claimed_performance": claimed_performance,
+                "actual_performance": actual_performance,
+                "is_valid": is_valid,
+                "fork_url": fork_url,
+                "commit_hash": commit_hash
+            }
+            
+        except Exception as e:
+            print(f"[VALIDATOR] Validation failed: {e}")
+            traceback.print_exc()
+            return {
+                "submission_id": submission.get("id"),
+                "miner_hotkey": submission.get("miner_hotkey"),
+                "claimed_performance": claimed_performance,
+                "actual_performance": 0.0,
+                "is_valid": False,
+                "error": str(e)
+            }
+    
+    def cleanup(self):
+        """Clean up temporary directory."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+            print(f"[VALIDATOR] Cleaned up temp dir: {self.temp_dir}")
 
 class DockerExecutor:
     """Executes code in Docker containers locally."""
@@ -229,6 +459,10 @@ class Validator(BaseValidatorNeuron):
         self.docker_executor = DockerExecutor()
         bt.logging.info("🐳 Docker executor initialized (local execution)")
         
+        # Initialize PerformanceValidator for speed optimization validation
+        self.performance_validator = PerformanceValidator()
+        bt.logging.info("⚡ Performance validator initialized")
+        
         # Initialize scores
         self.scores = torch.zeros(self.metagraph.n, dtype=torch.float32, device=self.device)
         self.load_state()
@@ -415,6 +649,56 @@ class Validator(BaseValidatorNeuron):
         except Exception as e:
             print(f"[VALIDATOR] ⚠️ Failed to evaluate submissions: {e}", flush=True)
             bt.logging.warning(f"Failed to evaluate submissions: {e}")
+        
+        return evaluated_scores
+
+    def evaluate_performance_submissions(self) -> Dict[str, float]:
+        """Evaluate performance submissions by cloning repos and running tests.
+        
+        Returns:
+            Dictionary mapping miner_hotkey to score (0.0 to 1.0).
+        """
+        print(f"[VALIDATOR] ⚡ Evaluating performance submissions...", flush=True)
+        bt.logging.info("⚡ Evaluating performance submissions...")
+        
+        evaluated_scores = {}  # hotkey -> score
+        
+        try:
+            # Fetch pending submissions from API
+            submissions = self.performance_validator.fetch_pending_submissions(limit=5)
+            
+            if not submissions:
+                print("[VALIDATOR] No performance submissions to evaluate", flush=True)
+                return evaluated_scores
+            
+            print(f"[VALIDATOR] Found {len(submissions)} performance submissions", flush=True)
+            
+            for submission in submissions:
+                # Validate the submission
+                result = self.performance_validator.validate_submission(submission)
+                
+                miner_hotkey = result.get("miner_hotkey")
+                is_valid = result.get("is_valid", False)
+                actual_performance = result.get("actual_performance", 0.0)
+                
+                # Score based on validity and performance
+                if is_valid:
+                    # Normalize performance to score (higher is better)
+                    # Assuming max reasonable performance is around 200,000 tokens/sec
+                    score = min(actual_performance / 200000.0, 1.0)
+                    print(f"[VALIDATOR] ✅ Valid submission from {miner_hotkey[:12]}... - Score: {score:.4f}", flush=True)
+                    evaluated_scores[miner_hotkey] = score
+                else:
+                    print(f"[VALIDATOR] ❌ Invalid submission from {miner_hotkey[:12]}...", flush=True)
+                    evaluated_scores[miner_hotkey] = 0.0
+            
+            if evaluated_scores:
+                print(f"[VALIDATOR] ✅ Evaluated {len(evaluated_scores)} performance submissions", flush=True)
+                
+        except Exception as e:
+            print(f"[VALIDATOR] ⚠️ Failed to evaluate performance submissions: {e}", flush=True)
+            bt.logging.warning(f"Failed to evaluate performance submissions: {e}")
+            traceback.print_exc()
         
         return evaluated_scores
 

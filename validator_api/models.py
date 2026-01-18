@@ -54,6 +54,19 @@ class MinerRegistration(Base):
     registered_at = Column(Integer, nullable=False, default=lambda: int(datetime.utcnow().timestamp()))
     last_seen = Column(Integer, nullable=False, default=lambda: int(datetime.utcnow().timestamp()))
 
+class SpeedSubmission(Base):
+    __tablename__ = "speed_submissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    miner_hotkey = Column(String, index=True)
+    miner_uid = Column(Integer)
+    fork_url = Column(String)
+    commit_hash = Column(String)
+    target_sequence_length = Column(Integer)
+    tokens_per_sec = Column(Float)
+    signature = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class TaskAssignment(Base):
     __tablename__ = "task_assignments"
 
@@ -143,3 +156,23 @@ class MinerSubmission(BaseModel):
     task_id: str
     answer: str
     miner_uid: int
+
+class SpeedSubmissionRequest(BaseModel):
+    miner_hotkey: str
+    fork_url: str
+    commit_hash: str
+    target_sequence_length: int
+    tokens_per_sec: float
+    signature: str
+
+class SpeedSubmissionResponse(BaseModel):
+    submission_id: int
+    miner_hotkey: str
+    fork_url: str
+    commit_hash: str
+    target_sequence_length: int
+    tokens_per_sec: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
