@@ -144,6 +144,8 @@ class Miner(BaseMinerNeuron):
         """Make API request to validator."""
         url = f"{self.validator_api_url}{path}"
         try:
+            print(f"[API] Request: {method} {url}", flush=True)
+            print(f"[API] Headers: {headers}", flush=True)
             resp = requests.request(
                 method=method,
                 url=url,
@@ -151,6 +153,7 @@ class Miner(BaseMinerNeuron):
                 json=json,
                 timeout=timeout,
             )
+            print(f"[API] Response status: {resp.status_code}", flush=True)
             return resp
         except Exception as e:
             bt.logging.error(f"API request failed: {e}")
@@ -810,6 +813,9 @@ if __name__ == "__main__":
                     if response is None:
                         raise RuntimeError("Failed to create submission request")
 
+                    print(f"[API] Response status: {response.status_code}", flush=True)
+                    print(f"[API] Response text: {response.text[:500]}", flush=True)
+
                     if response.status_code == 422:
                         minimal_payload = {
                             "miner_hotkey": payload["miner_hotkey"],
@@ -835,6 +841,8 @@ if __name__ == "__main__":
                         bt.logging.info(f"Submission successful: {result.get('submission_id')}")
                         print(f"[API] Submission successful: {result.get('submission_id')}", flush=True)
                         return True
+
+                    response.raise_for_status()
                     result = response.json()
                     bt.logging.info(f"Submission successful: {result.get('submission_id')}")
                     print(f"[API] Submission successful: {result.get('submission_id')}", flush=True)
@@ -842,6 +850,7 @@ if __name__ == "__main__":
                 except Exception as e:
                     last_err = e
                     bt.logging.warning(f"Submission attempt {attempt + 1}/3 failed: {e}")
+                    print(f"[API] Submission attempt {attempt + 1}/3 failed: {e}", flush=True)
                     time.sleep(2 * (attempt + 1))
 
             if last_err is not None:
@@ -1000,6 +1009,10 @@ if __name__ == "__main__":
                        help="Model name to use for optimization (default: silx-ai/Quasar-2M-Base)")
     parser.add_argument("--test-mode", action="store_true",
                        help="Test mode: only optimize chunk.py for quick testing")
+    parser.add_argument("--wallet.name", type=str, default="default",
+                       help="Wallet name (default: default)")
+    parser.add_argument("--wallet.hotkey", type=str, default="default",
+                       help="Wallet hotkey (default: default)")
     args = parser.parse_args()
     
     with Miner() as miner:

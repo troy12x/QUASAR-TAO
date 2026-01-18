@@ -167,7 +167,7 @@ class SpeedSubmissionRequest(BaseModel):
     target_sequence_length: int
     tokens_per_sec: float
     vram_mb: Optional[float] = None
-    benchmarks: Optional[Dict[int, Dict[str, float]]] = None
+    benchmarks: Optional[Dict[str, Dict[str, float]]] = None
     signature: str
 
 class SpeedSubmissionResponse(BaseModel):
