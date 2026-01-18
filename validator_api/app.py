@@ -39,9 +39,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuration
-CHALLENGE_URL = os.getenv("CHALLENGE_URL", "http://localhost:8080")
-
 # Rate limiting for DDOS protection
 # Simple in-memory rate limiter: {hotkey: [timestamp1, timestamp2, ...]}
 rate_limit_store = defaultdict(list)
@@ -96,35 +93,35 @@ class GetWeightsResponse(BaseModel):
     epoch: int
     weights: List[WeightEntry]
 
-@app.post("/submit_optimization")
-def submit_optimization(
+@app.post("/submit_kernel")
+def submit_kernel(
     req: models.SpeedSubmissionRequest,
     db: Session = Depends(get_db),
     hotkey: str = Depends(auth.verify_signature)
 ):
     """
-    Submit optimization results from miners.
+    Submit kernel optimization results from miners.
     Stores fork URL, commit hash, performance metrics, and signature.
     """
-    print(f"📥 [SUBMIT_OPT] Miner: {req.miner_hotkey[:8]} | Fork: {req.fork_url}")
-    print(f"📥 [SUBMIT_OPT] Commit: {req.commit_hash[:12]}... | Performance: {req.tokens_per_sec:.2f} tokens/sec")
+    print(f"📥 [SUBMIT_KERNEL] Miner: {req.miner_hotkey[:8]} | Fork: {req.fork_url}")
+    print(f"📥 [SUBMIT_KERNEL] Commit: {req.commit_hash[:12]}... | Performance: {req.tokens_per_sec:.2f} tokens/sec")
     if req.vram_mb is not None:
-        print(f"📥 [SUBMIT_OPT] VRAM_MB: {req.vram_mb:.2f}")
+        print(f"📥 [SUBMIT_KERNEL] VRAM_MB: {req.vram_mb:.2f}")
     if req.benchmarks is not None:
         try:
-            print(f"📥 [SUBMIT_OPT] Benchmarks: {len(req.benchmarks)} seq lengths")
+            print(f"📥 [SUBMIT_KERNEL] Benchmarks: {len(req.benchmarks)} seq lengths")
         except Exception:
-            print(f"📥 [SUBMIT_OPT] Benchmarks: (unprintable)")
-    
+            print(f"📥 [SUBMIT_KERNEL] Benchmarks: (unprintable)")
+
     # Verify the hotkey matches the authenticated miner
     if req.miner_hotkey != hotkey:
         raise HTTPException(status_code=403, detail="Hotkey mismatch")
-    
+
     # Check if miner is registered
     miner_reg = db.query(models.MinerRegistration).filter(
         models.MinerRegistration.hotkey == hotkey
     ).first()
-    
+
     if not miner_reg:
         raise HTTPException(status_code=404, detail="Miner not registered")
     

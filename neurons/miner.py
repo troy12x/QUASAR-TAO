@@ -790,7 +790,7 @@ if __name__ == "__main__":
                 try:
                     response = self._api_request(
                         "POST",
-                        "/submit_optimization",
+                        "/submit_kernel",
                         headers=headers,
                         json=payload,
                         timeout=120,
@@ -819,7 +819,11 @@ if __name__ == "__main__":
                         if response is None:
                             raise RuntimeError("Failed to create submission request")
 
-                    response.raise_for_status()
+                        response.raise_for_status()
+                        result = response.json()
+                        bt.logging.info(f"Submission successful: {result.get('submission_id')}")
+                        print(f"[API] Submission successful: {result.get('submission_id')}", flush=True)
+                        return True
                     result = response.json()
                     bt.logging.info(f"Submission successful: {result.get('submission_id')}")
                     print(f"[API] Submission successful: {result.get('submission_id')}", flush=True)
