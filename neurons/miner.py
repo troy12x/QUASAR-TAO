@@ -786,25 +786,15 @@ if __name__ == "__main__":
             print(f"[API] Submitting to validator: {performance:.2f} tokens/sec", flush=True)
 
             last_err: Optional[Exception] = None
-            submit_paths = [
-                "/submit_optimization",
-                "/api/submit_optimization",
-                "/validator_api/submit_optimization",
-                "/v1/submit_optimization",
-            ]
             for attempt in range(3):
                 try:
-                    response = None
-                    for submit_path in submit_paths:
-                        response = self._api_request(
-                            "POST",
-                            submit_path,
-                            headers=headers,
-                            json=payload,
-                            timeout=120,
-                        )
-                        if response.status_code != 404:
-                            break
+                    response = self._api_request(
+                        "POST",
+                        "/submit_optimization",
+                        headers=headers,
+                        json=payload,
+                        timeout=120,
+                    )
 
                     if response is None:
                         raise RuntimeError("Failed to create submission request")
@@ -818,17 +808,13 @@ if __name__ == "__main__":
                             "tokens_per_sec": payload["tokens_per_sec"],
                             "signature": self._sign_message(f"{fork_url}{commit_hash}{performance}"),
                         }
-                        response = None
-                        for submit_path in submit_paths:
-                            response = self._api_request(
-                                "POST",
-                                submit_path,
-                                headers=headers,
-                                json=minimal_payload,
-                                timeout=120,
-                            )
-                            if response.status_code != 404:
-                                break
+                        response = self._api_request(
+                            "POST",
+                            "/submit_optimization",
+                            headers=headers,
+                            json=minimal_payload,
+                            timeout=120,
+                        )
 
                         if response is None:
                             raise RuntimeError("Failed to create submission request")
