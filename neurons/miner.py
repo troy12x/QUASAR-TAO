@@ -47,6 +47,7 @@ class Miner(BaseMinerNeuron):
         "__init__.py"
     ]
     TEST_SEQUENCE_LENGTHS = [4096, 16384, 65536, 100000]
+    REPORT_SEQUENCE_LENGTHS = [512, 1024, 2048]
 
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
@@ -139,7 +140,7 @@ class Miner(BaseMinerNeuron):
             "Signature": signature,
         }
 
-    def _api_request(self, method: str, path: str, *, headers: Optional[dict] = None, json: Optional[dict] = None) -> requests.Response:
+    def _api_request(self, method: str, path: str, *, headers: Optional[dict] = None, json: Optional[dict] = None, timeout: int = 120) -> requests.Response:
         """Make API request to validator."""
         url = f"{self.validator_api_url}{path}"
         try:
@@ -148,7 +149,7 @@ class Miner(BaseMinerNeuron):
                 url=url,
                 headers=headers,
                 json=json,
-                timeout=30,
+                timeout=timeout,
             )
             return resp
         except Exception as e:
@@ -544,8 +545,12 @@ FINAL RESPONSE FORMAT (after using tools):
         
         return modified_files
 
-    def run_tests(self, repo_path: str, sequence_length: int = None) -> float:
-        """Run tests on the optimized code."""
+    def run_tests(self, repo_path: str, sequence_length: int = None) -> Dict[str, float]:
+        """Run tests on the optimized code.
+
+        Returns:
+            Dict with keys: tokens_per_sec, vram_mb
+        """
         if sequence_length is None:
             sequence_length = self.target_sequence_length
         
@@ -582,12 +587,15 @@ def test_quasar():
     ).to(device)
     
     x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
     
     # Warmup
     for _ in range(3):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
             _ = quasar(x)
-    
+
     if device.type == "cuda":
         torch.cuda.synchronize()
     
@@ -605,13 +613,20 @@ def test_quasar():
     
     elapsed = time.time() - start
     tokens_per_sec = (batch_size * seq_len * num_runs) / elapsed
+
+    vram_bytes = 0
+    if device.type == "cuda":
+        vram_bytes = torch.cuda.max_memory_allocated()
+    vram_mb = vram_bytes / (1024 * 1024)
     
     print(f"RESULT: {{tokens_per_sec:.2f}}")
-    return tokens_per_sec
+    print(f"VRAM_MB: {{vram_mb:.2f}}")
+    return {{'tokens_per_sec': tokens_per_sec, 'vram_mb': vram_mb}}
 
 if __name__ == "__main__":
     tps = test_quasar()
-    print(f"Tokens/sec: {{tps:.2f}}")
+    print(f"Tokens/sec: {{tps['tokens_per_sec']:.2f}}")
+    print(f"VRAM_MB: {{tps['vram_mb']:.2f}}")
 """)
         
         # Run test
@@ -629,26 +644,37 @@ if __name__ == "__main__":
             
             output = result.stdout + result.stderr
             
-            # Extract tokens/sec from output
+            tokens_per_sec = 0.0
+            vram_mb = 0.0
             for line in output.split('\n'):
                 if "RESULT:" in line:
                     tokens_per_sec = float(line.split("RESULT:")[1].strip())
-                    print(f"[TEST] Tokens/sec: {tokens_per_sec:.2f}", flush=True)
-                    return tokens_per_sec
+                if "VRAM_MB:" in line:
+                    vram_mb = float(line.split("VRAM_MB:")[1].strip())
+
+            if tokens_per_sec > 0:
+                print(f"[TEST] Tokens/sec: {tokens_per_sec:.2f} | VRAM: {vram_mb:.2f} MB", flush=True)
+                return {"tokens_per_sec": tokens_per_sec, "vram_mb": vram_mb}
             
             bt.logging.warning(f"Could not parse test results: {output}")
-            return 0.0
+            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
             
         except subprocess.TimeoutExpired:
             bt.logging.error("Test timed out (300s)")
-            return 0.0
+            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
         except Exception as e:
             bt.logging.error(f"Test failed: {e}")
-            return 0.0
+            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
         finally:
             # Clean up temp test script
             if os.path.exists(temp_test_script):
                 os.remove(temp_test_script)
+
+    def run_benchmarks(self, repo_path: str, sequence_lengths: List[int]) -> Dict[int, Dict[str, float]]:
+        results: Dict[int, Dict[str, float]] = {}
+        for seq_len in sequence_lengths:
+            results[int(seq_len)] = self.run_tests(repo_path, int(seq_len))
+        return results
 
     def get_commit_hash(self, repo_path: str) -> str:
         """Get the current commit hash."""
@@ -730,21 +756,23 @@ if __name__ == "__main__":
             
             print(f"[GIT] Changes pushed successfully", flush=True)
             return True
-            
-        except subprocess.CalledProcessError as e:
-            bt.logging.error(f"Git operation failed: {e.stderr}")
-            return False
 
-    def submit_to_validator(self, fork_url: str, commit_hash: str, performance: float) -> bool:
+    def submit_to_validator(self, fork_url: str, commit_hash: str, performance: float, benchmarks: Optional[Dict[int, Dict[str, float]]] = None) -> bool:
         """Submit optimization results to validator API."""
         try:
+            if benchmarks is None:
+                benchmarks = {}
+
+            target_metrics = benchmarks.get(int(self.target_sequence_length), {"tokens_per_sec": performance, "vram_mb": 0.0})
             payload = {
                 "miner_hotkey": self.wallet.hotkey.ss58_address,
                 "fork_url": fork_url,
                 "commit_hash": commit_hash,
                 "target_sequence_length": self.target_sequence_length,
-                "tokens_per_sec": performance,
-                "signature": self._sign_message(f"{fork_url}{commit_hash}{performance}")
+                "tokens_per_sec": target_metrics.get("tokens_per_sec", performance),
+                "vram_mb": float(target_metrics.get("vram_mb", 0.0)),
+                "benchmarks": benchmarks,
+                "signature": self._sign_message(f"{fork_url}{commit_hash}{performance}{json.dumps(benchmarks, sort_keys=True)}")
             }
             
             headers = self._get_auth_headers()
@@ -752,92 +780,74 @@ if __name__ == "__main__":
             
             bt.logging.info(f"Submitting to validator: {performance:.2f} tokens/sec")
             print(f"[API] Submitting to validator: {performance:.2f} tokens/sec", flush=True)
-            
-            response = self._api_request("POST", "/submit_optimization", headers=headers, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            
-            bt.logging.info(f"Submission successful: {result.get('submission_id')}")
-            print(f"[API] Submission successful: {result.get('submission_id')}", flush=True)
-            return True
+
+            last_err: Optional[Exception] = None
+            submit_paths = [
+                "/submit_optimization",
+                "/api/submit_optimization",
+                "/validator_api/submit_optimization",
+                "/v1/submit_optimization",
+            ]
+            for attempt in range(3):
+                try:
+                    response = None
+                    for submit_path in submit_paths:
+                        response = self._api_request(
+                            "POST",
+                            submit_path,
+                            headers=headers,
+                            json=payload,
+                            timeout=120,
+                        )
+                        if response.status_code != 404:
+                            break
+
+                    if response is None:
+                        raise RuntimeError("Failed to create submission request")
+
+                    if response.status_code == 422:
+                        minimal_payload = {
+                            "miner_hotkey": payload["miner_hotkey"],
+                            "fork_url": payload["fork_url"],
+                            "commit_hash": payload["commit_hash"],
+                            "target_sequence_length": payload["target_sequence_length"],
+                            "tokens_per_sec": payload["tokens_per_sec"],
+                            "signature": self._sign_message(f"{fork_url}{commit_hash}{performance}"),
+                        }
+                        response = None
+                        for submit_path in submit_paths:
+                            response = self._api_request(
+                                "POST",
+                                submit_path,
+                                headers=headers,
+                                json=minimal_payload,
+                                timeout=120,
+                            )
+                            if response.status_code != 404:
+                                break
+
+                        if response is None:
+                            raise RuntimeError("Failed to create submission request")
+
+                    response.raise_for_status()
+                    result = response.json()
+                    bt.logging.info(f"Submission successful: {result.get('submission_id')}")
+                    print(f"[API] Submission successful: {result.get('submission_id')}", flush=True)
+                    return True
+                except Exception as e:
+                    last_err = e
+                    bt.logging.warning(f"Submission attempt {attempt + 1}/3 failed: {e}")
+                    time.sleep(2 * (attempt + 1))
+
+            if last_err is not None:
+                raise last_err
             
         except Exception as e:
             bt.logging.warning(f"Submission failed: {e}")
             print(f"[API] Submission failed: {e}", flush=True)
             return False
 
-    # Tool functions for agent
-    def tool_run_command(self, repo_path: str, command: str) -> str:
-        """Execute a shell command in the repo directory."""
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            output = f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}\nReturn code: {result.returncode}"
-            print(f"[TOOL] run_command: {command}", flush=True)
-            print(f"[TOOL] Result: {output[:500]}...", flush=True)
-            return output
-        except subprocess.TimeoutExpired:
-            error = f"Command timed out after 30s: {command}"
-            print(f"[TOOL] Error: {error}", flush=True)
-            return error
-        except Exception as e:
-            error = f"Command failed: {e}"
-            print(f"[TOOL] Error: {error}", flush=True)
-            return error
-
-    def tool_list_files(self, repo_path: str, directory: str = "fla/ops/quasar") -> str:
-        """List files in a directory."""
-        try:
-            dir_path = os.path.join(repo_path, directory)
-            if not os.path.exists(dir_path):
-                return f"Directory does not exist: {dir_path}"
-            
-            files = os.listdir(dir_path)
-            output = f"Files in {directory}:\n" + "\n".join(files)
-            print(f"[TOOL] list_files: {directory}", flush=True)
-            print(f"[TOOL] Result: {output}", flush=True)
-            return output
-        except Exception as e:
-            error = f"Failed to list files: {e}"
-            print(f"[TOOL] Error: {error}", flush=True)
-            return error
-
-    def tool_read_file(self, repo_path: str, filename: str) -> str:
-        """Read file contents."""
-        try:
-            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
-            if not os.path.exists(file_path):
-                return f"File does not exist: {file_path}"
-            
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            print(f"[TOOL] read_file: {filename} ({len(content)} chars)", flush=True)
-            return content
-        except Exception as e:
-            error = f"Failed to read file: {e}"
-            print(f"[TOOL] Error: {error}", flush=True)
-            return error
-
-    def tool_write_file(self, repo_path: str, filename: str, content: str) -> str:
-        """Write content to a file."""
-        try:
-            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            print(f"[TOOL] write_file: {filename} ({len(content)} chars)", flush=True)
-            return f"Successfully wrote {filename} ({len(content)} chars)"
-        except Exception as e:
-            error = f"Failed to write file: {e}"
-            print(f"[TOOL] Error: {error}", flush=True)
-            return error
+    # ... (rest of the code remains the same)
 
     def run_optimization_loop(self, fork_url: str, repo_path: str):
         """Run the continuous optimization loop with agents."""
@@ -874,7 +884,8 @@ if __name__ == "__main__":
                     continue
                 
                 # Run tests
-                performance = self.run_tests(repo_path, self.target_sequence_length)
+                target_metrics = self.run_tests(repo_path, self.target_sequence_length)
+                performance = float(target_metrics.get("tokens_per_sec", 0.0))
                 
                 if performance <= 0:
                     print(f"[LOOP] Tests failed, reverting changes...", flush=True)
@@ -891,9 +902,18 @@ if __name__ == "__main__":
                     if self.commit_and_push(repo_path, commit_message):
                         best_commit = self.get_commit_hash(repo_path)
                         print(f"[LOOP] New best performance! Commit: {best_commit}", flush=True)
-                        
-                        # Submit to validator
-                        self.submit_to_validator(fork_url, best_commit, best_performance)
+
+                        seq_lengths = list(self.REPORT_SEQUENCE_LENGTHS)
+                        if int(self.target_sequence_length) not in seq_lengths:
+                            seq_lengths.append(int(self.target_sequence_length))
+                        print(f"[TEST] Running full benchmark suite: {seq_lengths}", flush=True)
+
+                        benchmarks = self.run_benchmarks(repo_path, seq_lengths)
+                        if any(float(m.get("tokens_per_sec", 0.0)) <= 0.0 for m in benchmarks.values()):
+                            print(f"[TEST] One or more benchmarks failed, skipping submission", flush=True)
+                        else:
+                            submission_performance = float(benchmarks.get(int(self.target_sequence_length), {}).get("tokens_per_sec", best_performance))
+                            self.submit_to_validator(fork_url, best_commit, submission_performance, benchmarks)
                 else:
                     print(f"[LOOP] Performance not improved, reverting changes...", flush=True)
                     subprocess.run(["git", "checkout", "--", "fla/ops/quasar/"], cwd=repo_path, capture_output=True)

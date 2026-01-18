@@ -108,6 +108,13 @@ def submit_optimization(
     """
     print(f"📥 [SUBMIT_OPT] Miner: {req.miner_hotkey[:8]} | Fork: {req.fork_url}")
     print(f"📥 [SUBMIT_OPT] Commit: {req.commit_hash[:12]}... | Performance: {req.tokens_per_sec:.2f} tokens/sec")
+    if req.vram_mb is not None:
+        print(f"📥 [SUBMIT_OPT] VRAM_MB: {req.vram_mb:.2f}")
+    if req.benchmarks is not None:
+        try:
+            print(f"📥 [SUBMIT_OPT] Benchmarks: {len(req.benchmarks)} seq lengths")
+        except Exception:
+            print(f"📥 [SUBMIT_OPT] Benchmarks: (unprintable)")
     
     # Verify the hotkey matches the authenticated miner
     if req.miner_hotkey != hotkey:

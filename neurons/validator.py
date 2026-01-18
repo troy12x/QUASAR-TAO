@@ -78,18 +78,44 @@ class PerformanceValidator:
             print(f"[VALIDATOR] Clone failed: {e.stderr}")
             raise
     
-    def run_performance_test(self, repo_path: str, sequence_length: int = 100000) -> float:
-        """Run performance test on cloned repository."""
-        test_script = os.path.join(repo_path, "test_quasar_attention.py")
-        
-        if not os.path.exists(test_script):
-            print(f"[VALIDATOR] Test script not found: {test_script}")
-            return 0.0
-        
-        print(f"[VALIDATOR] Running performance test...")
+    def checkout_commit(self, repo_path: str, commit_hash: str) -> None:
+        try:
+            subprocess.run(
+                ["git", "checkout", commit_hash],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.CalledProcessError:
+            subprocess.run(
+                ["git", "fetch", "--depth", "1", "origin", commit_hash],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            subprocess.run(
+                ["git", "checkout", commit_hash],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+    def run_performance_test(self, repo_path: str, sequence_length: int) -> Dict[str, float]:
+        """Run performance test on cloned repository.
+
+        Returns:
+            Dict with keys: tokens_per_sec, vram_mb
+        """
+        print(f"[VALIDATOR] Running performance test (seq_len={sequence_length})...")
         
         # Create temporary test script with target sequence length
-        temp_test_script = os.path.join(repo_path, "test_temp.py")
+        temp_test_script = os.path.join(repo_path, f"test_temp_{sequence_length}.py")
         with open(temp_test_script, 'w') as f:
             f.write(f"""
 import sys
@@ -121,6 +147,9 @@ def test_quasar():
     ).to(device)
     
     x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
     
     # Warmup
     for _ in range(3):
@@ -144,8 +173,14 @@ def test_quasar():
     
     elapsed = time.time() - start
     tokens_per_sec = (batch_size * seq_len * num_runs) / elapsed
+
+    vram_bytes = 0
+    if device.type == "cuda":
+        vram_bytes = torch.cuda.max_memory_allocated()
+    vram_mb = vram_bytes / (1024 * 1024)
     
     print(f"RESULT: {{tokens_per_sec:.2f}}")
+    print(f"VRAM_MB: {{vram_mb:.2f}}")
     return tokens_per_sec
 
 if __name__ == "__main__":
@@ -164,22 +199,27 @@ if __name__ == "__main__":
             
             output = result.stdout + result.stderr
             
-            # Extract tokens/sec from output
+            tokens_per_sec = 0.0
+            vram_mb = 0.0
             for line in output.split('\n'):
                 if "RESULT:" in line:
                     tokens_per_sec = float(line.split("RESULT:")[1].strip())
-                    print(f"[VALIDATOR] Test result: {tokens_per_sec:.2f} tokens/sec")
-                    return tokens_per_sec
+                if "VRAM_MB:" in line:
+                    vram_mb = float(line.split("VRAM_MB:")[1].strip())
+            
+            if tokens_per_sec > 0:
+                print(f"[VALIDATOR] Test result: {tokens_per_sec:.2f} tokens/sec | VRAM: {vram_mb:.2f} MB")
+                return {"tokens_per_sec": tokens_per_sec, "vram_mb": vram_mb}
             
             print(f"[VALIDATOR] Could not parse test results: {output}")
-            return 0.0
+            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
             
         except subprocess.TimeoutExpired:
             print(f"[VALIDATOR] Test timed out (300s)")
-            return 0.0
+            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
         except Exception as e:
             print(f"[VALIDATOR] Test failed: {e}")
-            return 0.0
+            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
         finally:
             # Clean up temp test script
             if os.path.exists(temp_test_script):
@@ -217,9 +257,17 @@ if __name__ == "__main__":
         try:
             # Clone the repository
             repo_path = self.clone_miner_repo(fork_url)
+
+            if commit_hash:
+                self.checkout_commit(repo_path, commit_hash)
             
-            # Run performance test
-            actual_performance = self.run_performance_test(repo_path, target_sequence_length)
+            seq_lengths = sorted(set([512, 1024, 2048, int(target_sequence_length)]))
+            results_by_seq_len: Dict[int, Dict[str, float]] = {}
+            for seq_len in seq_lengths:
+                results_by_seq_len[seq_len] = self.run_performance_test(repo_path, seq_len)
+
+            target_results = results_by_seq_len.get(int(target_sequence_length), {"tokens_per_sec": 0.0, "vram_mb": 0.0})
+            actual_performance = float(target_results.get("tokens_per_sec", 0.0))
             
             # Verify performance
             is_valid = self.verify_performance(claimed_performance, actual_performance)
@@ -233,6 +281,7 @@ if __name__ == "__main__":
                 "miner_hotkey": submission.get("miner_hotkey"),
                 "claimed_performance": claimed_performance,
                 "actual_performance": actual_performance,
+                "results_by_seq_len": results_by_seq_len,
                 "is_valid": is_valid,
                 "fork_url": fork_url,
                 "commit_hash": commit_hash

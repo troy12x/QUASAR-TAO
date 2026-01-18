@@ -3,7 +3,7 @@ from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 # SQLAlchemy Models
 class Task(Base):
@@ -163,6 +163,8 @@ class SpeedSubmissionRequest(BaseModel):
     commit_hash: str
     target_sequence_length: int
     tokens_per_sec: float
+    vram_mb: Optional[float] = None
+    benchmarks: Optional[Dict[int, Dict[str, float]]] = None
     signature: str
 
 class SpeedSubmissionResponse(BaseModel):
