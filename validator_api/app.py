@@ -64,14 +64,6 @@ def check_rate_limit(hotkey: str):
     # Add current timestamp
     rate_limit_store[hotkey].append(now)
 
-# Initialize datasets
-print("🔄 Initializing datasets in API...")
-longcode_dataset = longcode_loader.LongcodeDataset()
-print(f"✅ LongcodeDataset ready with {len(longcode_dataset)} samples.")
-
-print(f"✅ Challenge container URL: {CHALLENGE_URL}")
-print(f"   (Code execution will be handled by challenge container)")
-
 # League configuration
 LEAGUES = ["100k", "200k", "300k", "400k", "500k", "600k", "700k", "800k", "900k", "1M"]
 LEAGUE_MULTIPLIERS = {
@@ -94,6 +86,15 @@ def get_league(context_length: int) -> str:
         if context_length <= max_tokens:
             return league
     return "1M"  # Fallback to highest league
+
+class WeightEntry(BaseModel):
+    uid: int
+    hotkey: str
+    weight: float
+
+class GetWeightsResponse(BaseModel):
+    epoch: int
+    weights: List[WeightEntry]
 
 @app.post("/submit_optimization")
 def submit_optimization(
@@ -217,122 +218,6 @@ def get_submission_stats(
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
-
-@app.post("/report_result")
-def report_result(
-    result_in: models.ResultCreate,
-    db: Session = Depends(get_db),
-    validator_hotkey: str = Depends(auth.verify_validator_signature)  # Only validators can report
-):
-    """
-    Validators report miner responses to the API.
-    The API performs authoritative scoring and league-based competition.
-    """
-    print(f"📥 [REPORT_RESULT] Task: {result_in.task_id} | Miner: {result_in.miner_hotkey[:8]} (UID: {result_in.miner_uid})")
-
-    # 1. Fetch Task details
-    db_task = db.query(models.Task).filter(models.Task.id == result_in.task_id).first()
-    if not db_task:
-        print(f"❌ [REPORT_RESULT] Task {result_in.task_id} not found in DB")
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    # 2. Calculate response hash if not provided
-    resp_text = result_in.response_text or ""
-    resp_hash = result_in.response_hash or hashlib.sha256(resp_text.encode()).hexdigest()
-
-    # 3. Duplicate detection
-    existing_result = db.query(models.Result).filter(
-        models.Result.task_id == result_in.task_id,
-        models.Result.response_hash == resp_hash
-    ).first()
-
-    if existing_result:
-        if existing_result.miner_hotkey != result_in.miner_hotkey:
-            print(f"⚠️ [REPORT_RESULT] Duplicate response from different miner ({result_in.miner_hotkey[:8]})")
-            return {"status": "rejected", "reason": "duplicate_response"}
-        print(f"ℹ️ [REPORT_RESULT] Already reported by {result_in.miner_hotkey[:8]}")
-        return {"status": "already_reported", "score": existing_result.score}
-
-    # 4. For longcode tasks, score is already calculated by /submit_longcode
-    # For direct reporting, use the provided score
-    base_score = result_in.score if result_in.score is not None else 0.0
-    method = "longcode_code_execution"
-
-    # 5. Determine league from context length
-    league = get_league(db_task.context_length)
-    league_multiplier = LEAGUE_MULTIPLIERS.get(league, 1.0)
-
-    # 6. Find miner's registration (model_name, league)
-    miner_registrations = db.query(models.MinerScore).filter(
-        models.MinerScore.hotkey == result_in.miner_hotkey,
-        models.MinerScore.league == league
-    ).all()
-
-    if not miner_registrations:
-        print(f"⚠️ [REPORT_RESULT] Miner {result_in.miner_hotkey[:8]} not registered for league {league}")
-        # Still save the result but can't calculate league-based reward
-        db_result = models.Result(
-            task_id=result_in.task_id,
-            miner_hotkey=result_in.miner_hotkey,
-            miner_uid=result_in.miner_uid,
-            response_hash=resp_hash,
-            response_text=resp_text,
-            score=base_score
-        )
-        db.add(db_result)
-        db.commit()
-        return {"status": "reported_no_league", "score": base_score}
-
-    # 7. For each model registration, calculate league-based reward
-    for reg in miner_registrations:
-        model_name = reg.model_name
-
-        # Get top score for this (league, model) combo
-        top_entry = db.query(models.MinerScore).filter(
-            models.MinerScore.league == league,
-            models.MinerScore.model_name == model_name,
-            models.MinerScore.tasks_completed >= 10
-        ).order_by(models.MinerScore.score.desc()).first()
-
-        if top_entry and top_entry.score > 0:
-            # Normalize against top performer
-            normalized_score = base_score / top_entry.score
-        else:
-            # No top performer yet, use base score
-            normalized_score = base_score
-
-        # Apply league multiplier
-        final_score = normalized_score * league_multiplier
-        final_score = max(0.0, min(final_score, 3.0))  # Clamp to max league multiplier
-
-        # Update miner's EMA score for this (model, league)
-        alpha = 0.1
-        reg.score = alpha * final_score + (1 - alpha) * reg.score
-        reg.tasks_completed += 1
-
-    print(f"🎯 [REPORT_RESULT] Answer extraction: predicted={predicted_answer}, truth={expected_answer}, correct={is_correct}")
-
-    # 8. Save result
-    db_result = models.Result(
-        task_id=result_in.task_id,
-        miner_hotkey=result_in.miner_hotkey,
-        miner_uid=result_in.miner_uid,
-        response_hash=resp_hash,
-        response_text=resp_text,
-        score=base_score  # Store base score, not league-adjusted
-    )
-    db.add(db_result)
-    db.commit()
-
-    # Return the final score from the first registration
-    first_reg = miner_registrations[0]
-    return {
-        "status": "reported",
-        "base_score": base_score,
-        "league": league,
-        "league_multiplier": league_multiplier,
-        "final_score": first_reg.score
-    }
 
 @app.post("/register_miner")
 def register_miner(
