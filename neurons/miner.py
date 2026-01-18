@@ -570,14 +570,20 @@ import torch
 from fla.layers.quasar import QuasarAttention
 
 def test_quasar():
+    import gc
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     batch_size = 1
     seq_len = {sequence_length}
     hidden_size = 512
     head_dim = 64
     num_heads = 8
-    
+
+    # Clear GPU cache before creating model
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+        gc.collect()
+
     quasar = QuasarAttention(
         hidden_size=hidden_size,
         head_dim=head_dim,
@@ -585,12 +591,12 @@ def test_quasar():
         mode="chunk",
         use_short_conv=True,
     ).to(device)
-    
+
     x = torch.randn(batch_size, seq_len, hidden_size, device=device)
 
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
-    
+
     # Warmup
     for _ in range(3):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
@@ -598,19 +604,24 @@ def test_quasar():
 
     if device.type == "cuda":
         torch.cuda.synchronize()
-    
+
+    # Clear cache before benchmark
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+        gc.collect()
+
     # Benchmark
     import time
     num_runs = 10
     start = time.time()
-    
+
     for _ in range(num_runs):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
             _ = quasar(x)
-    
+
     if device.type == "cuda":
         torch.cuda.synchronize()
-    
+
     elapsed = time.time() - start
     tokens_per_sec = (batch_size * seq_len * num_runs) / elapsed
 
