@@ -191,6 +191,15 @@ def get_submission_stats(
         .all()
     )
 
+    def parse_benchmarks(benchmarks_str):
+        """Parse benchmarks JSON string with error handling."""
+        if not benchmarks_str:
+            return None
+        try:
+            return json.loads(benchmarks_str)
+        except Exception:
+            return None
+
     return {
         "total_submissions": total_submissions,
         "recent_submissions": [
@@ -202,7 +211,7 @@ def get_submission_stats(
                 "target_sequence_length": s.target_sequence_length,
                 "tokens_per_sec": s.tokens_per_sec,
                 "vram_mb": s.vram_mb,
-                "benchmarks": json.loads(s.benchmarks) if s.benchmarks else None,
+                "benchmarks": parse_benchmarks(s.benchmarks),
                 "validated": s.validated,
                 "created_at": s.created_at.isoformat()
             }
