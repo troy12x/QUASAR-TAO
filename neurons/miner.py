@@ -756,6 +756,10 @@ if __name__ == "__main__":
             
             print(f"[GIT] Changes pushed successfully", flush=True)
             return True
+        except Exception as e:
+            bt.logging.error(f"Failed to commit and push: {e}")
+            print(f"[GIT] Failed to commit and push: {e}", flush=True)
+            return False
 
     def submit_to_validator(self, fork_url: str, commit_hash: str, performance: float, benchmarks: Optional[Dict[int, Dict[str, float]]] = None) -> bool:
         """Submit optimization results to validator API."""
