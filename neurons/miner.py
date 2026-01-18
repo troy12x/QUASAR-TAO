@@ -240,6 +240,57 @@ class Miner(BaseMinerNeuron):
         
         return codebase
 
+    def tool_run_command(self, repo_path: str, command: str) -> str:
+        """Execute a shell command in the repo directory."""
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            output = result.stdout or result.stderr
+            return f"Command: {command}\nOutput:\n{output}"
+        except subprocess.TimeoutExpired:
+            return f"Command timed out: {command}"
+        except Exception as e:
+            return f"Error running command: {e}"
+
+    def tool_list_files(self, repo_path: str, directory: str) -> str:
+        """List files in a directory."""
+        try:
+            dir_path = os.path.join(repo_path, directory)
+            if not os.path.exists(dir_path):
+                return f"Directory not found: {directory}"
+            files = os.listdir(dir_path)
+            return f"Files in {directory}:\n" + "\n".join(files)
+        except Exception as e:
+            return f"Error listing files: {e}"
+
+    def tool_read_file(self, repo_path: str, filename: str) -> str:
+        """Read a file from the repo."""
+        try:
+            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
+            if not os.path.exists(file_path):
+                return f"File not found: {filename}"
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return f"Content of {filename}:\n{content}"
+        except Exception as e:
+            return f"Error reading file: {e}"
+
+    def tool_write_file(self, repo_path: str, filename: str, content: str) -> str:
+        """Write content to a file in the repo."""
+        try:
+            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return f"Successfully wrote {filename} ({len(content)} chars)"
+        except Exception as e:
+            return f"Error writing file: {e}"
+
     def run_agent_optimization(self, codebase: Dict[str, str], iteration: int) -> Dict[str, str]:
         """Run AI agent to optimize the code."""
         # Step 1: Planning phase - ask agent to analyze and plan

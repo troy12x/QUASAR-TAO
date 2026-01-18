@@ -13,6 +13,7 @@ import bittensor as bt
 import traceback
 import requests
 import shutil
+import json
 from typing import List, Dict, Optional
 
 # Add the parent directory to path
