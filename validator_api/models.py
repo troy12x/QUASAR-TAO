@@ -177,6 +177,8 @@ class SpeedSubmissionResponse(BaseModel):
     commit_hash: str
     target_sequence_length: int
     tokens_per_sec: float
+    vram_mb: Optional[float] = None
+    benchmarks: Optional[Dict[str, Dict[str, float]]] = None
     created_at: datetime
 
     class Config:

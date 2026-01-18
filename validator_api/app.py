@@ -188,6 +188,8 @@ def submit_kernel(
             commit_hash=new_submission.commit_hash,
             target_sequence_length=new_submission.target_sequence_length,
             tokens_per_sec=new_submission.tokens_per_sec,
+            vram_mb=new_submission.vram_mb,
+            benchmarks=json.loads(new_submission.benchmarks) if new_submission.benchmarks else None,
             created_at=new_submission.created_at
         )
     except HTTPException:
