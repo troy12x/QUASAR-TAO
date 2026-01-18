@@ -164,76 +164,83 @@ def get_submission_stats(
     Returns recent submissions with performance metrics.
     Only returns unvalidated submissions for validator to process.
     """
-    # Get recent unvalidated submissions
-    recent_submissions = (
-        db.query(models.SpeedSubmission)
-        .filter(models.SpeedSubmission.validated == False)
-        .order_by(models.SpeedSubmission.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    import traceback
+    try:
+        # Get recent unvalidated submissions
+        recent_submissions = (
+            db.query(models.SpeedSubmission)
+            .filter(models.SpeedSubmission.validated == False)
+            .order_by(models.SpeedSubmission.created_at.desc())
+            .limit(limit)
+            .all()
+        )
 
-    # Calculate stats
-    total_submissions = db.query(models.SpeedSubmission).count()
+        # Calculate stats
+        total_submissions = db.query(models.SpeedSubmission).count()
 
-    if recent_submissions:
-        avg_tokens_per_sec = sum(s.tokens_per_sec for s in recent_submissions) / len(recent_submissions)
-        max_tokens_per_sec = max(s.tokens_per_sec for s in recent_submissions)
-        min_tokens_per_sec = min(s.tokens_per_sec for s in recent_submissions)
-    else:
-        avg_tokens_per_sec = max_tokens_per_sec = min_tokens_per_sec = 0.0
+        if recent_submissions:
+            avg_tokens_per_sec = sum(s.tokens_per_sec for s in recent_submissions) / len(recent_submissions)
+            max_tokens_per_sec = max(s.tokens_per_sec for s in recent_submissions)
+            min_tokens_per_sec = min(s.tokens_per_sec for s in recent_submissions)
+        else:
+            avg_tokens_per_sec = max_tokens_per_sec = min_tokens_per_sec = 0.0
 
-    # Get top performers
-    top_submissions = (
-        db.query(models.SpeedSubmission)
-        .order_by(models.SpeedSubmission.tokens_per_sec.desc())
-        .limit(10)
-        .all()
-    )
+        # Get top performers
+        top_submissions = (
+            db.query(models.SpeedSubmission)
+            .order_by(models.SpeedSubmission.tokens_per_sec.desc())
+            .limit(10)
+            .all()
+        )
 
-    def parse_benchmarks(benchmarks_str):
-        """Parse benchmarks JSON string with error handling."""
-        if not benchmarks_str:
-            return None
-        try:
-            return json.loads(benchmarks_str)
-        except Exception:
-            return None
+        def parse_benchmarks(benchmarks_str):
+            """Parse benchmarks JSON string with error handling."""
+            if not benchmarks_str:
+                return None
+            try:
+                return json.loads(benchmarks_str)
+            except Exception as e:
+                print(f"Error parsing benchmarks: {e}")
+                return None
 
-    return {
-        "total_submissions": total_submissions,
-        "recent_submissions": [
-            {
-                "id": s.id,
-                "miner_hotkey": s.miner_hotkey,
-                "fork_url": s.fork_url,
-                "commit_hash": s.commit_hash,
-                "target_sequence_length": s.target_sequence_length,
-                "tokens_per_sec": s.tokens_per_sec,
-                "vram_mb": s.vram_mb,
-                "benchmarks": parse_benchmarks(s.benchmarks),
-                "validated": s.validated,
-                "created_at": s.created_at.isoformat()
-            }
-            for s in recent_submissions
-        ],
-        "stats": {
-            "avg_tokens_per_sec": round(avg_tokens_per_sec, 2),
-            "max_tokens_per_sec": round(max_tokens_per_sec, 2),
-            "min_tokens_per_sec": round(min_tokens_per_sec, 2),
-            "total_submissions": total_submissions
-        },
-        "top_performers": [
-            {
-                "id": s.id,
-                "miner_hotkey": s.miner_hotkey,
-                "tokens_per_sec": s.tokens_per_sec,
-                "target_sequence_length": s.target_sequence_length,
-                "created_at": s.created_at.isoformat()
-            }
-            for s in top_submissions
-        ]
-    }
+        return {
+            "total_submissions": total_submissions,
+            "recent_submissions": [
+                {
+                    "id": s.id,
+                    "miner_hotkey": s.miner_hotkey,
+                    "fork_url": s.fork_url,
+                    "commit_hash": s.commit_hash,
+                    "target_sequence_length": s.target_sequence_length,
+                    "tokens_per_sec": s.tokens_per_sec,
+                    "vram_mb": s.vram_mb,
+                    "benchmarks": parse_benchmarks(s.benchmarks),
+                    "validated": s.validated,
+                    "created_at": s.created_at.isoformat()
+                }
+                for s in recent_submissions
+            ],
+            "stats": {
+                "avg_tokens_per_sec": round(avg_tokens_per_sec, 2),
+                "max_tokens_per_sec": round(max_tokens_per_sec, 2),
+                "min_tokens_per_sec": round(min_tokens_per_sec, 2),
+                "total_submissions": total_submissions
+            },
+            "top_performers": [
+                {
+                    "id": s.id,
+                    "miner_hotkey": s.miner_hotkey,
+                    "tokens_per_sec": s.tokens_per_sec,
+                    "target_sequence_length": s.target_sequence_length,
+                    "created_at": s.created_at.isoformat()
+                }
+                for s in top_submissions
+            ]
+        }
+    except Exception as e:
+        print(f"Error in get_submission_stats: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 def health_check():
