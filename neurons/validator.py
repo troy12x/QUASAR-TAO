@@ -30,11 +30,64 @@ VALIDATOR_API_URL = os.getenv("VALIDATOR_API_URL", "https://quasar-subnet.onrend
 
 class PerformanceValidator:
     """Validates miner performance claims by cloning repos and running tests."""
-    
+
+    # Required imports that must be present
+    REQUIRED_IMPORTS = [
+        "import torch",
+        "import torch.nn.functional as F",
+        "import triton",
+        "import triton.language as tl",
+        "from fla.ops.utils.index import prepare_chunk_indices",
+        "from fla.ops.quasar.forward_substitution import forward_substitution_kernel",
+        "from fla.utils import IS_AMD",
+        "from fla.utils import autocast_custom_bwd",
+        "from fla.utils import autocast_custom_fwd",
+        "from fla.utils import autotune_cache_kwargs",
+        "from fla.utils import check_shared_mem",
+        "from fla.utils import input_guard",
+    ]
+
+    # Forbidden imports that must NOT be present
+    FORBIDDEN_IMPORTS = [
+        "from fla.ops.gla",
+        "from fla.ops.kda",
+        "import fla.ops.gla",
+        "import fla.ops.kda",
+    ]
+
     def __init__(self):
         self.validator_api_url = VALIDATOR_API_URL
         self.temp_dir = tempfile.mkdtemp(prefix="quasar_validator_")
         print(f"[VALIDATOR] Initialized with temp dir: {self.temp_dir}")
+
+    def validate_imports(self, repo_path: str) -> tuple[bool, List[str]]:
+        """Validate that files have required imports and no forbidden imports."""
+        quasar_dir = os.path.join(repo_path, "fla/ops/quasar")
+        target_files = ["chunk.py", "chunk_intra_token_parallel.py", "forward_substitution.py", "fused_recurrent.py", "gate.py"]
+
+        errors = []
+
+        for filename in target_files:
+            file_path = os.path.join(quasar_dir, filename)
+            if not os.path.exists(file_path):
+                errors.append(f"Missing file: {filename}")
+                continue
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Check for forbidden imports
+            for forbidden in self.FORBIDDEN_IMPORTS:
+                if forbidden in content:
+                    errors.append(f"{filename}: Forbidden import found: {forbidden}")
+
+            # Check for required imports (only for main files like chunk.py)
+            if filename == "chunk.py":
+                for required in self.REQUIRED_IMPORTS:
+                    if required not in content:
+                        errors.append(f"{filename}: Missing required import: {required}")
+
+        return len(errors) == 0, errors
     
     def fetch_pending_submissions(self, limit: int = 10) -> List[Dict]:
         """Fetch pending submissions from validator API."""
@@ -274,6 +327,25 @@ if __name__ == "__main__":
 
             if commit_hash:
                 self.checkout_commit(repo_path, commit_hash)
+
+            # Validate imports - check for forbidden imports and required imports
+            print(f"[VALIDATOR] Checking imports...")
+            imports_valid, import_errors = self.validate_imports(repo_path)
+            if not imports_valid:
+                print(f"[VALIDATOR] ❌ Import validation failed:")
+                for error in import_errors:
+                    print(f"  - {error}")
+                return {
+                    "submission_id": submission.get("id"),
+                    "miner_hotkey": submission.get("miner_hotkey"),
+                    "claimed_performance": claimed_performance,
+                    "actual_performance": 0.0,
+                    "score": 0.0,
+                    "is_valid": False,
+                    "errors": import_errors,
+                    "reason": "Import validation failed"
+                }
+            print(f"[VALIDATOR] ✅ Import validation passed")
 
             # Run benchmarks for all reported sequence lengths
             seq_lengths_to_test = sorted(set([512, 1024, 2048, int(target_sequence_length)]))
