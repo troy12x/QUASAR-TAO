@@ -73,6 +73,10 @@ class Miner(BaseMinerNeuron):
         # Get model name from config or use default
         self.model_name = getattr(self.config.miner, 'model_name', "silx-ai/Quasar-2M-Base")
         
+        # Agent generation parameters
+        self.agent_max_length = 8192
+        self.agent_max_new_tokens = 4096
+
         # Model will be loaded in load_model() method
         self.model = None
         self.tokenizer = None
@@ -392,23 +396,32 @@ TOOL CALL FORMAT:
 When you want to use a tool, format your response as:
 <TOOL_CALL>
 {{"tool": "run_command", "args": {{"command": "ls fla/ops/quasar/"}}}}
+
+
 </TOOL_CALL>
 
 CRITICAL INSTRUCTIONS:
 1. PRESERVE ALL IMPORTS at the top of each file (triton, torch, etc.)
 2. PRESERVE ALL FUNCTION SIGNATURES and EXPORTED NAMES (chunk_quasar, fused_recurrent_quasar, etc.)
 3. DO NOT change function names that are imported by __init__.py
-4. Optimize kernel code INSIDE functions, not function signatures
-5. Keep changes ONLY in fla/ops/quasar/ files
-6. Maintain numerical accuracy (rtol < 1e-3)
-7. Return the COMPLETE file content including all imports
-8. USE THE ACTUAL FILENAME (e.g., "{', '.join(codebase.keys())}") NOT "filename.py"
+4. FULLY KERNELIZE PyTorch code: Look for PyTorch operations (torch.nn.functional, torch.matmul, torch.softmax, torch.einsum, etc.) and REPLACE ALL OF THEM with optimized Triton kernels
+5. Focus on chunk.py - this file contains PyTorch code that MUST be fully kernelized using Triton for maximum performance
+6. REMOVE ALL PyTorch operations like: torch.matmul, torch.softmax, torch.einsum, torch.nn.functional.scaled_dot_product_attention, torch.exp, torch.cat, torch.reshape, torch.transpose, torch.zeros, torch.new_zeros, torch.stack, torch.split, torch.chunk, torch.permute, torch.flip, torch.roll, torch.index_select, torch.gather, torch.scatter, torch.repeat, torch.tile, torch.unsqueeze, torch.squeeze, torch.view, torch.reshape, torch.flatten, torch.mean, torch.sum, torch.prod, torch.max, torch.min, torch.clamp, torch.relu, torch.sigmoid, torch.tanh, torch.softmax, torch.log_softmax, torch.nn.functional.normalize, torch.nn.functional.layer_norm, torch.nn.functional.group_norm, torch.nn.functional.instance_norm, torch.nn.functional.batch_norm, etc.
+7. Replace PyTorch operations with custom Triton kernels for maximum GPU performance
+8. DO NOT use ANY PyTorch tensor operations in the forward pass - ONLY use Triton kernels
+9. DO NOT use torch.cat, torch.reshape, torch.transpose, torch.zeros, torch.new_zeros, torch.stack, torch.split, torch.chunk, torch.permute, torch.flip, torch.roll, torch.index_select, torch.gather, torch.scatter, torch.repeat, torch.tile, torch.unsqueeze, torch.squeeze, torch.view, torch.reshape, torch.flatten, torch.mean, torch.sum, torch.prod, torch.max, torch.min, torch.clamp, torch.relu, torch.sigmoid, torch.tanh, torch.softmax, torch.log_softmax, torch.nn.functional.normalize, torch.nn.functional.layer_norm, torch.nn.functional.group_norm, torch.nn.functional.instance_norm, torch.nn.functional.batch_norm
+10. Keep changes ONLY in fla/ops/quasar/ files
+11. Maintain numerical accuracy (rtol < 1e-3)
+12. Return the COMPLETE file content including all imports
+13. USE THE ACTUAL FILENAME (e.g., "{', '.join(codebase.keys())}") NOT "filename.py"
+14. DO NOT import from fla.ops.gla or fla.ops.kda - this will cause validation to fail
 
 WORKFLOW:
 1. First, use tools to verify the current state of files
-2. Then generate optimized code
-3. Use write_file to save the optimized code
-4. Finally, return the optimized file contents in the format below
+2. Identify ALL PyTorch operations in chunk.py (torch.matmul, torch.softmax, torch.einsum, torch.exp, torch.cat, torch.reshape, torch.transpose, torch.zeros, torch.new_zeros, torch.stack, torch.split, torch.chunk, torch.permute, torch.flip, torch.roll, torch.index_select, torch.gather, torch.scatter, torch.repeat, torch.tile, torch.unsqueeze, torch.squeeze, torch.view, torch.reshape, torch.flatten, torch.mean, torch.sum, torch.prod, torch.max, torch.min, torch.clamp, torch.relu, torch.sigmoid, torch.tanh, torch.softmax, torch.log_softmax, torch.nn.functional.normalize, torch.nn.functional.layer_norm, torch.nn.functional.group_norm, torch.nn.functional.instance_norm, torch.nn.functional.batch_norm, etc.)
+3. Generate optimized Triton kernels to REPLACE ALL PyTorch operations
+4. Use write_file to save the fully kernelized code
+5. Finally, return the optimized file contents in the format below
 
 FINAL RESPONSE FORMAT (after using tools):
 {chr(10).join([f"### {name} ###\n<complete file with all imports and optimized code>" for name in codebase.keys()])}
@@ -434,29 +447,35 @@ FINAL RESPONSE FORMAT (after using tools):
         repo_path = os.path.join(tempfile.gettempdir(), "flash-linear-attention-miner")
         
         while tool_call_count < max_tool_calls:
+            # Clear GPU cache before generation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+
             text_input = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             model_inputs = self.tokenizer(
                 [text_input],
                 return_tensors="pt",
                 truncation=True,
-                max_length=self.max_length,
+                max_length=self.agent_max_length,
             ).to(self.device)
-            
+
             input_length = model_inputs.input_ids.shape[1]
             print(f"[AGENT] Input length: {input_length} tokens", flush=True)
             print(f"[AGENT] Generating...", flush=True)
-            
+
             # Use streaming generation
             streamer = TextIteratorStreamer(
                 self.tokenizer,
                 skip_prompt=True,
                 skip_special_tokens=True
             )
-            
+
             generation_kwargs = {
                 "input_ids": model_inputs.input_ids,
                 "attention_mask": model_inputs.attention_mask,
-                "max_new_tokens": 16000,
+                "max_new_tokens": self.agent_max_new_tokens,
                 "do_sample": True,
                 "temperature": 0.3,
                 "top_p": 0.9,
@@ -494,9 +513,10 @@ FINAL RESPONSE FORMAT (after using tools):
                 # Parse tool call
                 try:
                     import re
-                    match = re.search(r'<TOOL_CALL>\s*({.*?})\s*</TOOL_CALL>', ai_response, re.DOTALL)
+                    match = re.search(r'<TOOL_CALL>\s*(.*?)\s*</TOOL_CALL>', ai_response, re.DOTALL)
                     if match:
-                        tool_data = json.loads(match.group(1))
+                        tool_block = match.group(1).strip()
+                        tool_data = json.loads(tool_block)
                         tool_name = tool_data.get("tool")
                         tool_args = tool_data.get("args", {})
                         
@@ -544,49 +564,96 @@ FINAL RESPONSE FORMAT (after using tools):
 
     def parse_agent_response(self, ai_response: str) -> Dict[str, str]:
         """Parse agent response to extract optimized file contents."""
+        import re
+
         files = {}
+        # Remove model reasoning + tool-call blocks + any wrapper tags that some models emit.
+        ai_response = re.sub(r"<think>.*?</think>\s*", "", ai_response, flags=re.DOTALL | re.IGNORECASE)
+        ai_response = re.sub(r"<TOOL_CALL>.*?</TOOL_CALL>\s*", "", ai_response, flags=re.DOTALL | re.IGNORECASE)
+        # Strip any single-line XML-like tags (e.g., <OPTIMIZED_...>, </FINAL_RESPONSE_FORMAT>)
+        ai_response = re.sub(r"^\s*<\s*/?\s*[A-Za-z0-9_:\-]+\s*>\s*$", "", ai_response, flags=re.MULTILINE)
+        # Back-compat for older wrapper used earlier
+        ai_response = re.sub(r"</?\s*OPTIMIZED_CONTENT\s*>\s*", "", ai_response, flags=re.DOTALL | re.IGNORECASE)
         parts = ai_response.split("### ")
         
         print(f"[AGENT] Parsing response into files...", flush=True)
-        
+
+        allowed_files = set(self.TARGET_FILES)
+
         for part in parts:
             if not part.strip():
                 continue
-            
+
             lines = part.split("\n", 1)
             if len(lines) >= 1:
                 filename = lines[0].strip()
-                # Remove path prefixes if present
                 if "/" in filename:
                     filename = filename.split("/")[-1]
                 if filename.endswith(" ###"):
                     filename = filename[:-4].strip()
-                
+
                 content = lines[1] if len(lines) > 1 else ""
-                
+
                 if filename and content:
+                    if filename not in allowed_files:
+                        bt.logging.warning(f"Ignoring non-target filename from agent output: {filename}")
+                        print(f"[AGENT] Ignoring non-target filename: {filename}", flush=True)
+                        continue
+
                     files[filename] = content
                     print(f"[AGENT] Parsed file: {filename} ({len(content)} chars)", flush=True)
                     bt.logging.info(f"Parsed optimized file: {filename} ({len(content)} chars)")
-        
+
         print(f"[AGENT] Total files parsed: {len(files)}", flush=True)
+
+        # Fallback: if the model returned raw python without a "### chunk.py ###" header
+        # and we are only optimizing a single file (e.g., test-mode), treat the remaining
+        # content as that file.
+        if not files and len(allowed_files) == 1:
+            only_file = next(iter(allowed_files))
+            candidate = ai_response.strip()
+
+            # Heuristic: start from first import/from statement if the model prefixed extra text.
+            m = re.search(r"(^|\n)(import\s+\w+|from\s+\w+)", candidate)
+            if m:
+                candidate = candidate[m.start(2):].lstrip()
+
+            if "def " in candidate and ("import " in candidate or "from " in candidate):
+                files[only_file] = candidate
+                print(f"[AGENT] Fallback parsed file: {only_file} ({len(candidate)} chars)", flush=True)
+
         return files
 
     def write_optimized_files(self, repo_path: str, optimized_files: Dict[str, str]) -> List[str]:
         """Write optimized files to repository."""
+        import re
+
         modified_files = []
-        
+
+        allowed_files = set(self.TARGET_FILES)
+
         for filename, content in optimized_files.items():
+            if filename not in allowed_files:
+                bt.logging.warning(f"Skipping non-target filename: {filename}")
+                print(f"[FILE] Skipping non-target filename: {filename}", flush=True)
+                continue
+
+            content = re.sub(r"</?\s*OPTIMIZED_CONTENT\s*>\s*", "", content, flags=re.DOTALL | re.IGNORECASE)
+            content = re.sub(r"^\s*<\s*/?\s*[A-Za-z0-9_:\-]+\s*>\s*$", "", content, flags=re.MULTILINE)
+
             file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
-            
+
             if not file_path.startswith(os.path.join(repo_path, "fla/ops/quasar")):
                 bt.logging.warning(f"Skipping file outside quasar directory: {file_path}")
                 continue
-            
-            # Check if file exists and backup old content
+
             if os.path.exists(file_path):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     old_content = f.read()
+                if old_content == content:
+                    print(f"[FILE] No change for {filename}; skipping write", flush=True)
+                    continue
+
                 print(f"[FILE] Backing up old {filename} ({len(old_content)} chars)", flush=True)
             
             # Write new content
@@ -938,11 +1005,24 @@ if __name__ == "__main__":
                 if not optimized_files:
                     print(f"[LOOP] No optimizations generated, skipping...", flush=True)
                     continue
+
+                # Filter out no-op outputs (agent returned identical file content)
+                changed_files: Dict[str, str] = {}
+                for filename, content in optimized_files.items():
+                    if filename in codebase and content != codebase[filename]:
+                        changed_files[filename] = content
+
+                if not changed_files:
+                    print(f"[LOOP] Agent returned no actual code changes (identical output); skipping...", flush=True)
+                    continue
                 
                 # Write optimized files (with import validation)
                 try:
-                    modified_files = self.write_optimized_files(repo_path, optimized_files)
+                    modified_files = self.write_optimized_files(repo_path, changed_files)
                     print(f"[LOOP] Modified {len(modified_files)} files", flush=True)
+                    if not modified_files:
+                        print(f"[LOOP] No files changed on disk; skipping tests...", flush=True)
+                        continue
                 except ImportError as e:
                     print(f"[LOOP] Import validation failed, reverting changes: {e}", flush=True)
                     subprocess.run(["git", "checkout", "--", "fla/ops/quasar/"], cwd=repo_path, capture_output=True)
@@ -1064,15 +1144,21 @@ if __name__ == "__main__":
                        help="Wallet name (default: default)")
     parser.add_argument("--wallet.hotkey", type=str, default="default",
                        help="Wallet hotkey (default: default)")
+    parser.add_argument("--max-length", type=int, default=8192,
+                       help="Max token length for input tokenization (default: 8192)")
+    parser.add_argument("--max-new-tokens", type=int, default=4096,
+                       help="Max new tokens to generate (default: 4096)")
     args = parser.parse_args()
-    
+
     with Miner() as miner:
         # Override config with command line args
         miner.agent_iterations = args.agent_iterations
         miner.target_sequence_length = args.target_seq_len
         miner.optimization_interval = args.optimization_interval
         miner.model_name = args.model_name
-        
+        miner.agent_max_length = args.max_length
+        miner.agent_max_new_tokens = args.max_new_tokens
+
         # Test mode: only optimize chunk.py
         if args.test_mode:
             miner.TARGET_FILES = ["chunk.py"]
