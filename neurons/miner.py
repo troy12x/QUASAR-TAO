@@ -427,44 +427,51 @@ FINAL RESPONSE FORMAT (after using tools):
 {chr(10).join([f"### {name} ###\n<complete file with all imports and optimized code>" for name in codebase.keys()])}
 """
         
-        bt.logging.info(f"Running agent optimization iteration {iteration}...")
-        print(f"[AGENT] Step 2: Generating optimized code...", flush=True)
+    bt.logging.info(f"Running agent optimization iteration {iteration}...")
+    print(f"[AGENT] Step 2: Generating optimized code...", flush=True)
         
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a GPU kernel optimization expert specializing in Triton kernels. Use tools to verify file state before generating code. Return ONLY the optimized file contents in the specified format after using tools."
-            },
-            {
-                "role": "user",
-                "content": context
-            }
-        ]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "ABSOLUTE REQUIREMENT: You MUST use tool calls for ALL file operations - NO EXCEPTIONS. "
+                "FORBIDDEN: DO NOT output prose, code blocks, plain text, explanations, or any non-tool content. "
+                "MANDATORY: ONLY use write_file tool calls to update files. "
+                "Tool call format: <TOOL_CALL>{\"tool\":\"write_file\",\"args\":{\"filename\":\"chunk.py\",\"content\":\"...\"}}</TOOL_CALL> "
+                "For large content, use: <TOOL_CALL>{\"tool\":\"write_file\",\"args\":{\"filename\":\"chunk.py\"}}<FILE_CONTENT>...complete file...</FILE_CONTENT></TOOL_CALL> "
+                "STRICTLY PROHIBITED: Any text output without tool calls will be ignored. "
+                "ENFORCED BEHAVIOR: Use ONLY the write_file tool to save optimized code. "
+                "FAILURE CONSEQUENCE: If you output prose/plain text instead of tool calls, the system will retry with stronger enforcement. "
+                "MANDATORY COMPLIANCE: Every response MUST be a tool call, no exceptions."
+            )
+        },
+        {
+            "role": "user",
+            "content": context
+        }
+    ]
         
-        # Tool-calling loop
-        max_tool_calls = 10
-        tool_call_count = 0
-        repo_path = os.path.join(tempfile.gettempdir(), "flash-linear-attention-miner")
-        
-        while tool_call_count < max_tool_calls:
-            # Clear GPU cache before generation
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                import gc
-                gc.collect()
-
-            text_input = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            model_inputs = self.tokenizer(
-                [text_input],
-                return_tensors="pt",
-                truncation=True,
-                max_length=self.agent_max_length,
-            ).to(self.device)
-
-            input_length = model_inputs.input_ids.shape[1]
-            print(f"[AGENT] Input length: {input_length} tokens", flush=True)
-            print(f"[AGENT] Generating...", flush=True)
-
+    max_tool_calls = 10
+    tool_call_count = 0
+    no_write_attempts = 0
+    written_files: Dict[str, str] = {}
+    repo_path = os.path.join(tempfile.gettempdir(), "flash-linear-attention-miner")
+    while tool_call_count < max_tool_calls:
+        # Clear GPU cache before generation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            import gc
+            gc.collect()
+        text_input = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        model_inputs = self.tokenizer(
+            [text_input],
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.agent_max_length,
+        ).to(self.device)
+        input_length = model_inputs.input_ids.shape[1]
+        print(f"[AGENT] Input length: {input_length} tokens", flush=True)
+        print(f"[AGENT] Generating...", flush=True)
             # Use streaming generation
             streamer = TextIteratorStreamer(
                 self.tokenizer,
@@ -516,9 +523,33 @@ FINAL RESPONSE FORMAT (after using tools):
                     match = re.search(r'<TOOL_CALL>\s*(.*?)\s*</TOOL_CALL>', ai_response, re.DOTALL)
                     if match:
                         tool_block = match.group(1).strip()
-                        tool_data = json.loads(tool_block)
+
+                        # Allow a large file body to be sent out-of-band to avoid JSON escaping issues:
+                        # <TOOL_CALL>
+                        # {"tool":"write_file","args":{"filename":"chunk.py"}}
+                        # <FILE_CONTENT>
+                        # ... raw python ...
+                        # </FILE_CONTENT>
+                        # </TOOL_CALL>
+                        tool_json = tool_block
+                        file_content = None
+                        if "<FILE_CONTENT>" in tool_block:
+                            tool_json = tool_block.splitlines()[0].strip()
+                            m = re.search(r"<FILE_CONTENT>\s*(.*?)\s*</FILE_CONTENT>", tool_block, re.DOTALL | re.IGNORECASE)
+                            if m:
+                                file_content = m.group(1)
+
+                        try:
+                            tool_data = json.loads(tool_json)
+                        except Exception:
+                            import ast
+                            tool_data = ast.literal_eval(tool_json)
                         tool_name = tool_data.get("tool")
                         tool_args = tool_data.get("args", {})
+
+                        if tool_name == "write_file" and "content" not in tool_args and file_content is not None:
+                            tool_args = dict(tool_args)
+                            tool_args["content"] = file_content
                         
                         print(f"[AGENT] Executing tool: {tool_name}", flush=True)
                         
@@ -530,7 +561,12 @@ FINAL RESPONSE FORMAT (after using tools):
                         elif tool_name == "read_file":
                             result = self.tool_read_file(repo_path, tool_args.get("filename", ""))
                         elif tool_name == "write_file":
-                            result = self.tool_write_file(repo_path, tool_args.get("filename", ""), tool_args.get("content", ""))
+                            filename = tool_args.get("filename", "")
+                            content = tool_args.get("content", "")
+                            result = self.tool_write_file(repo_path, filename, content)
+
+                            if filename in self.TARGET_FILES and isinstance(content, str) and content.strip():
+                                written_files[filename] = content
                         else:
                             result = f"Unknown tool: {tool_name}"
                         
@@ -553,13 +589,45 @@ FINAL RESPONSE FORMAT (after using tools):
                     print(f"[AGENT] Error executing tool: {e}", flush=True)
                     break
             else:
-                # No tool call, this is the final response
+                # No tool call. If the agent didn't produce any tool-based writes yet, force a retry.
+                if not written_files:
+                    no_write_attempts += 1
+                    if no_write_attempts <= 3:
+                        print(f"[AGENT] No write_file tool call detected; requesting tool-based write...", flush=True)
+                        messages.append({
+                            "role": "assistant",
+                            "content": ai_response,
+                        })
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                "CRITICAL FAILURE: You did NOT use tool calls as required. "
+                                "ABSOLUTE MANDATE: You MUST use write_file tool calls ONLY - NO EXCEPTIONS. "
+                                "FORBIDDEN BEHAVIOR: Outputting prose/plain text is strictly prohibited. "
+                                "ENFORCED FORMAT: Use this exact tool call format:\n"
+                                "<TOOL_CALL>\n"
+                                "{\"tool\":\"write_file\",\"args\":{\"filename\":\"chunk.py\"}}\n"
+                                "<FILE_CONTENT>\n"
+                                "<COMPLETE chunk.py FILE CONTENT HERE>\n"
+                                "</FILE_CONTENT>\n"
+                                "</TOOL_CALL>\n"
+                                "NON-COMPLIANCE CONSEQUENCE: System will retry with stronger enforcement until tool calls are used. "
+                                "ABSOLUTE REQUIREMENT: Every response MUST be a tool call, no exceptions."
+                            ),
+                        })
+                        continue
+
                 print(f"[AGENT] Final response received", flush=True)
                 break
         
         if tool_call_count >= max_tool_calls:
             print(f"[AGENT] Max tool calls reached, using last response", flush=True)
         
+        # Prefer tool-based writes (authoritative) over brittle parsing of free-form text.
+        if written_files:
+            print(f"[AGENT] Using tool-written files: {list(written_files.keys())}", flush=True)
+            return written_files
+
         return self.parse_agent_response(ai_response)
 
     def parse_agent_response(self, ai_response: str) -> Dict[str, str]:
