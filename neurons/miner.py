@@ -71,7 +71,7 @@ class Miner(BaseMinerNeuron):
         bt.logging.info(f"Using device: {self.device}")
         
         # Get model name from config or use default
-        self.model_name = getattr(self.config.miner, 'model_name', "silx-ai/Quasar-2M-Base")
+        self.model_name = getattr(self.config.miner, 'model_name', "Qwen/Qwen2.5-0.5B-Instruct")
         
         # Agent generation parameters
         self.agent_max_length = 8192
@@ -228,653 +228,6 @@ class Miner(BaseMinerNeuron):
 
         return local_path
 
-    def read_target_files(self, repo_path: str) -> Dict[str, str]:
-        """Read the target Quasar files."""
-        quasar_dir = os.path.join(repo_path, "fla/ops/quasar")
-        codebase = {}
-        
-        for filename in self.TARGET_FILES:
-            file_path = os.path.join(quasar_dir, filename)
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    codebase[filename] = f.read()
-                bt.logging.info(f"Read {filename} ({len(codebase[filename])} chars)")
-            else:
-                bt.logging.warning(f"File not found: {file_path}")
-        
-        return codebase
-
-    def tool_run_command(self, repo_path: str, command: str) -> str:
-        """Execute a shell command in the repo directory."""
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            output = result.stdout or result.stderr
-            return f"Command: {command}\nOutput:\n{output}"
-        except subprocess.TimeoutExpired:
-            return f"Command timed out: {command}"
-        except Exception as e:
-            return f"Error running command: {e}"
-
-    def tool_list_files(self, repo_path: str, directory: str) -> str:
-        """List files in a directory."""
-        try:
-            dir_path = os.path.join(repo_path, directory)
-            if not os.path.exists(dir_path):
-                return f"Directory not found: {directory}"
-            files = os.listdir(dir_path)
-            return f"Files in {directory}:\n" + "\n".join(files)
-        except Exception as e:
-            return f"Error listing files: {e}"
-
-    def tool_read_file(self, repo_path: str, filename: str) -> str:
-        """Read a file from the repo."""
-        try:
-            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
-            if not os.path.exists(file_path):
-                return f"File not found: {filename}"
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            return f"Content of {filename}:\n{content}"
-        except Exception as e:
-            return f"Error reading file: {e}"
-
-    def tool_write_file(self, repo_path: str, filename: str, content: str) -> str:
-        """Write content to a file in the repo."""
-        try:
-            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            return f"Successfully wrote {filename} ({len(content)} chars)"
-        except Exception as e:
-            return f"Error writing file: {e}"
-
-    def run_agent_optimization(self, codebase: Dict[str, str], iteration: int) -> Dict[str, str]:
-        """Run AI agent to optimize the code."""
-        # Step 1: Planning phase - ask agent to analyze and plan
-        print(f"[AGENT] Step 1: Analyzing code and planning optimizations...", flush=True)
-        plan_context = f"""You are a GPU kernel optimization expert specializing in Triton kernels for Quasar attention.
-
-Iteration: {iteration}
-Target sequence length: {self.target_sequence_length}
-
-Available Files to analyze:
-{chr(10).join([f"- {name} ({len(code)} chars)" for name, code in codebase.items()])}
-
-Task:
-1. Analyze the current implementation
-2. Identify which files need optimization for sequence length {self.target_sequence_length}
-3. Plan specific optimizations (e.g., memory layout, kernel fusion, parallelization)
-4. Return a JSON plan with function calls
-
-Response Format (JSON only):
-{{
-  "analysis": "Brief analysis of current bottlenecks",
-  "files_to_edit": ["chunk.py", "fused_recurrent.py"],
-  "optimizations": [
-    {{
-      "file": "chunk.py",
-      "description": "Optimize memory access pattern",
-      "technique": "Shared memory tiling"
-    }}س
-  ],
-  "expected_improvement": "10-20% tokens/sec improvement"
-}}
-"""
-        
-        plan_messages = [
-            {
-                "role": "system",
-                "content": "You are a GPU kernel optimization expert. Return ONLY valid JSON."
-            },
-            {
-                "role": "user",
-                "content": plan_context
-            }
-        ]
-        
-        plan_input = self.tokenizer.apply_chat_template(plan_messages, tokenize=False, add_generation_prompt=True)
-        plan_inputs = self.tokenizer(
-            [plan_input],
-            return_tensors="pt",
-            truncation=True,
-            max_length=8192,
-        ).to(self.device)
-        
-        with torch.no_grad():
-            plan_ids = self.model.generate(
-                plan_inputs.input_ids,
-                attention_mask=plan_inputs.attention_mask,
-                max_new_tokens=2048,
-                do_sample=True,
-                temperature=0.2,
-                top_p=0.9,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
-        
-        plan_ids = [output_ids[len(plan_inputs.input_ids[0]):] for output_ids in plan_ids]
-        plan_response = self.tokenizer.batch_decode(plan_ids, skip_special_tokens=True)[0]
-        
-        print(f"[AGENT] Plan:\n{plan_response}", flush=True)
-        
-        del plan_inputs, plan_ids
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        # Step 2: Generation phase - generate optimized code
-        context = f"""You are a GPU kernel optimization expert specializing in Triton kernels for Quasar attention.
-
-Iteration: {iteration}
-Target sequence length: {self.target_sequence_length}
-
-Available Files to optimize (FULL CONTENT):
-{chr(10).join([f"### {name} ###\n{code}" for name, code in codebase.items()])}
-
-AVAILABLE TOOLS:
-You can use these tools to interact with the file system:
-
-1. run_command(command: str) - Execute a shell command
-   Example: run_command("ls fla/ops/quasar/")
-   Example: run_command("cat fla/ops/quasar/chunk.py | head -50")
-
-2. list_files(directory: str) - List files in a directory
-   Example: list_files("fla/ops/quasar")
-
-3. read_file(filename: str) - Read file contents
-   Example: read_file("chunk.py")
-
-4. write_file(filename: str, content: str) - Write content to a file
-   Example: write_file("chunk.py", "<optimized code>")
-
-TOOL CALL FORMAT:
-When you want to use a tool, format your response as:
-<TOOL_CALL>
-{{"tool": "run_command", "args": {{"command": "ls fla/ops/quasar/"}}}}
-
-
-</TOOL_CALL>
-
-CRITICAL INSTRUCTIONS:
-1. PRESERVE ALL IMPORTS at the top of each file (triton, torch, etc.)
-2. PRESERVE ALL FUNCTION SIGNATURES and EXPORTED NAMES (chunk_quasar, fused_recurrent_quasar, etc.)
-3. DO NOT change function names that are imported by __init__.py
-4. FULLY KERNELIZE PyTorch code: Look for PyTorch operations (torch.nn.functional, torch.matmul, torch.softmax, torch.einsum, etc.) and REPLACE ALL OF THEM with optimized Triton kernels
-5. Focus on chunk.py - this file contains PyTorch code that MUST be fully kernelized using Triton for maximum performance
-6. REMOVE ALL PyTorch operations like: torch.matmul, torch.softmax, torch.einsum, torch.nn.functional.scaled_dot_product_attention, torch.exp, torch.cat, torch.reshape, torch.transpose, torch.zeros, torch.new_zeros, torch.stack, torch.split, torch.chunk, torch.permute, torch.flip, torch.roll, torch.index_select, torch.gather, torch.scatter, torch.repeat, torch.tile, torch.unsqueeze, torch.squeeze, torch.view, torch.reshape, torch.flatten, torch.mean, torch.sum, torch.prod, torch.max, torch.min, torch.clamp, torch.relu, torch.sigmoid, torch.tanh, torch.softmax, torch.log_softmax, torch.nn.functional.normalize, torch.nn.functional.layer_norm, torch.nn.functional.group_norm, torch.nn.functional.instance_norm, torch.nn.functional.batch_norm, etc.
-7. Replace PyTorch operations with custom Triton kernels for maximum GPU performance
-8. DO NOT use ANY PyTorch tensor operations in the forward pass - ONLY use Triton kernels
-9. DO NOT use torch.cat, torch.reshape, torch.transpose, torch.zeros, torch.new_zeros, torch.stack, torch.split, torch.chunk, torch.permute, torch.flip, torch.roll, torch.index_select, torch.gather, torch.scatter, torch.repeat, torch.tile, torch.unsqueeze, torch.squeeze, torch.view, torch.reshape, torch.flatten, torch.mean, torch.sum, torch.prod, torch.max, torch.min, torch.clamp, torch.relu, torch.sigmoid, torch.tanh, torch.softmax, torch.log_softmax, torch.nn.functional.normalize, torch.nn.functional.layer_norm, torch.nn.functional.group_norm, torch.nn.functional.instance_norm, torch.nn.functional.batch_norm
-10. Keep changes ONLY in fla/ops/quasar/ files
-11. Maintain numerical accuracy (rtol < 1e-3)
-12. Return the COMPLETE file content including all imports
-13. USE THE ACTUAL FILENAME (e.g., "{', '.join(codebase.keys())}") NOT "filename.py"
-14. DO NOT import from fla.ops.gla or fla.ops.kda - this will cause validation to fail
-
-WORKFLOW:
-1. First, use tools to verify the current state of files
-2. Identify ALL PyTorch operations in chunk.py (torch.matmul, torch.softmax, torch.einsum, torch.exp, torch.cat, torch.reshape, torch.transpose, torch.zeros, torch.new_zeros, torch.stack, torch.split, torch.chunk, torch.permute, torch.flip, torch.roll, torch.index_select, torch.gather, torch.scatter, torch.repeat, torch.tile, torch.unsqueeze, torch.squeeze, torch.view, torch.reshape, torch.flatten, torch.mean, torch.sum, torch.prod, torch.max, torch.min, torch.clamp, torch.relu, torch.sigmoid, torch.tanh, torch.softmax, torch.log_softmax, torch.nn.functional.normalize, torch.nn.functional.layer_norm, torch.nn.functional.group_norm, torch.nn.functional.instance_norm, torch.nn.functional.batch_norm, etc.)
-3. Generate optimized Triton kernels to REPLACE ALL PyTorch operations
-4. Use write_file to save the fully kernelized code
-5. Finally, return the optimized file contents in the format below
-
-FINAL RESPONSE FORMAT (after using tools):
-{chr(10).join([f"### {name} ###\n<complete file with all imports and optimized code>" for name in codebase.keys()])}
-"""
-        
-    bt.logging.info(f"Running agent optimization iteration {iteration}...")
-    print(f"[AGENT] Step 2: Generating optimized code...", flush=True)
-        
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "ABSOLUTE REQUIREMENT: You MUST use tool calls for ALL file operations - NO EXCEPTIONS. "
-                "FORBIDDEN: DO NOT output prose, code blocks, plain text, explanations, or any non-tool content. "
-                "MANDATORY: ONLY use write_file tool calls to update files. "
-                "Tool call format: <TOOL_CALL>{\"tool\":\"write_file\",\"args\":{\"filename\":\"chunk.py\",\"content\":\"...\"}}</TOOL_CALL> "
-                "For large content, use: <TOOL_CALL>{\"tool\":\"write_file\",\"args\":{\"filename\":\"chunk.py\"}}<FILE_CONTENT>...complete file...</FILE_CONTENT></TOOL_CALL> "
-                "STRICTLY PROHIBITED: Any text output without tool calls will be ignored. "
-                "ENFORCED BEHAVIOR: Use ONLY the write_file tool to save optimized code. "
-                "FAILURE CONSEQUENCE: If you output prose/plain text instead of tool calls, the system will retry with stronger enforcement. "
-                "MANDATORY COMPLIANCE: Every response MUST be a tool call, no exceptions."
-            )
-        },
-        {
-            "role": "user",
-            "content": context
-        }
-    ]
-        
-    max_tool_calls = 10
-    tool_call_count = 0
-    no_write_attempts = 0
-    written_files: Dict[str, str] = {}
-    repo_path = os.path.join(tempfile.gettempdir(), "flash-linear-attention-miner")
-    while tool_call_count < max_tool_calls:
-        # Clear GPU cache before generation
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            import gc
-            gc.collect()
-        text_input = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        model_inputs = self.tokenizer(
-            [text_input],
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.agent_max_length,
-        ).to(self.device)
-        input_length = model_inputs.input_ids.shape[1]
-        print(f"[AGENT] Input length: {input_length} tokens", flush=True)
-        print(f"[AGENT] Generating...", flush=True)
-            # Use streaming generation
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                "input_ids": model_inputs.input_ids,
-                "attention_mask": model_inputs.attention_mask,
-                "max_new_tokens": self.agent_max_new_tokens,
-                "do_sample": True,
-                "temperature": 0.3,
-                "top_p": 0.9,
-                "pad_token_id": self.tokenizer.eos_token_id,
-                "streamer": streamer
-            }
-            
-            # Start generation in a separate thread
-            import threading
-            thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
-            thread.start()
-            
-            # Stream output in real-time
-            ai_response = ""
-            print(f"[AGENT] Streaming output:\n", flush=True)
-            for new_text in streamer:
-                print(new_text, end="", flush=True)
-                ai_response += new_text
-            print(flush=True)
-            
-            thread.join()
-            
-            output_length = len(self.tokenizer.encode(ai_response))
-            print(f"\n[AGENT] Generated {output_length} tokens", flush=True)
-            
-            del model_inputs
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            # Check for tool calls
-            if "<TOOL_CALL>" in ai_response:
-                print(f"[AGENT] Tool call detected, executing...", flush=True)
-                tool_call_count += 1
-                
-                # Parse tool call
-                try:
-                    import re
-                    match = re.search(r'<TOOL_CALL>\s*(.*?)\s*</TOOL_CALL>', ai_response, re.DOTALL)
-                    if match:
-                        tool_block = match.group(1).strip()
-
-                        # Allow a large file body to be sent out-of-band to avoid JSON escaping issues:
-                        # <TOOL_CALL>
-                        # {"tool":"write_file","args":{"filename":"chunk.py"}}
-                        # <FILE_CONTENT>
-                        # ... raw python ...
-                        # </FILE_CONTENT>
-                        # </TOOL_CALL>
-                        tool_json = tool_block
-                        file_content = None
-                        if "<FILE_CONTENT>" in tool_block:
-                            tool_json = tool_block.splitlines()[0].strip()
-                            m = re.search(r"<FILE_CONTENT>\s*(.*?)\s*</FILE_CONTENT>", tool_block, re.DOTALL | re.IGNORECASE)
-                            if m:
-                                file_content = m.group(1)
-
-                        try:
-                            tool_data = json.loads(tool_json)
-                        except Exception:
-                            import ast
-                            tool_data = ast.literal_eval(tool_json)
-                        tool_name = tool_data.get("tool")
-                        tool_args = tool_data.get("args", {})
-
-                        if tool_name == "write_file" and "content" not in tool_args and file_content is not None:
-                            tool_args = dict(tool_args)
-                            tool_args["content"] = file_content
-                        
-                        print(f"[AGENT] Executing tool: {tool_name}", flush=True)
-                        
-                        # Execute tool
-                        if tool_name == "run_command":
-                            result = self.tool_run_command(repo_path, tool_args.get("command", ""))
-                        elif tool_name == "list_files":
-                            result = self.tool_list_files(repo_path, tool_args.get("directory", "fla/ops/quasar"))
-                        elif tool_name == "read_file":
-                            result = self.tool_read_file(repo_path, tool_args.get("filename", ""))
-                        elif tool_name == "write_file":
-                            filename = tool_args.get("filename", "")
-                            content = tool_args.get("content", "")
-                            result = self.tool_write_file(repo_path, filename, content)
-
-                            if filename in self.TARGET_FILES and isinstance(content, str) and content.strip():
-                                written_files[filename] = content
-                        else:
-                            result = f"Unknown tool: {tool_name}"
-                        
-                        # Add tool result to conversation
-                        messages.append({
-                            "role": "assistant",
-                            "content": ai_response
-                        })
-                        messages.append({
-                            "role": "system",
-                            "content": f"Tool result:\n{result}"
-                        })
-                        
-                        print(f"[AGENT] Tool executed, continuing...", flush=True)
-                        continue
-                    else:
-                        print(f"[AGENT] Failed to parse tool call", flush=True)
-                        break
-                except Exception as e:
-                    print(f"[AGENT] Error executing tool: {e}", flush=True)
-                    break
-            else:
-                # No tool call. If the agent didn't produce any tool-based writes yet, force a retry.
-                if not written_files:
-                    no_write_attempts += 1
-                    if no_write_attempts <= 3:
-                        print(f"[AGENT] No write_file tool call detected; requesting tool-based write...", flush=True)
-                        messages.append({
-                            "role": "assistant",
-                            "content": ai_response,
-                        })
-                        messages.append({
-                            "role": "system",
-                            "content": (
-                                "CRITICAL FAILURE: You did NOT use tool calls as required. "
-                                "ABSOLUTE MANDATE: You MUST use write_file tool calls ONLY - NO EXCEPTIONS. "
-                                "FORBIDDEN BEHAVIOR: Outputting prose/plain text is strictly prohibited. "
-                                "ENFORCED FORMAT: Use this exact tool call format:\n"
-                                "<TOOL_CALL>\n"
-                                "{\"tool\":\"write_file\",\"args\":{\"filename\":\"chunk.py\"}}\n"
-                                "<FILE_CONTENT>\n"
-                                "<COMPLETE chunk.py FILE CONTENT HERE>\n"
-                                "</FILE_CONTENT>\n"
-                                "</TOOL_CALL>\n"
-                                "NON-COMPLIANCE CONSEQUENCE: System will retry with stronger enforcement until tool calls are used. "
-                                "ABSOLUTE REQUIREMENT: Every response MUST be a tool call, no exceptions."
-                            ),
-                        })
-                        continue
-
-                print(f"[AGENT] Final response received", flush=True)
-                break
-        
-        if tool_call_count >= max_tool_calls:
-            print(f"[AGENT] Max tool calls reached, using last response", flush=True)
-        
-        # Prefer tool-based writes (authoritative) over brittle parsing of free-form text.
-        if written_files:
-            print(f"[AGENT] Using tool-written files: {list(written_files.keys())}", flush=True)
-            return written_files
-
-        return self.parse_agent_response(ai_response)
-
-    def parse_agent_response(self, ai_response: str) -> Dict[str, str]:
-        """Parse agent response to extract optimized file contents."""
-        import re
-
-        files = {}
-        # Remove model reasoning + tool-call blocks + any wrapper tags that some models emit.
-        ai_response = re.sub(r"<think>.*?</think>\s*", "", ai_response, flags=re.DOTALL | re.IGNORECASE)
-        ai_response = re.sub(r"<TOOL_CALL>.*?</TOOL_CALL>\s*", "", ai_response, flags=re.DOTALL | re.IGNORECASE)
-        # Strip any single-line XML-like tags (e.g., <OPTIMIZED_...>, </FINAL_RESPONSE_FORMAT>)
-        ai_response = re.sub(r"^\s*<\s*/?\s*[A-Za-z0-9_:\-]+\s*>\s*$", "", ai_response, flags=re.MULTILINE)
-        # Back-compat for older wrapper used earlier
-        ai_response = re.sub(r"</?\s*OPTIMIZED_CONTENT\s*>\s*", "", ai_response, flags=re.DOTALL | re.IGNORECASE)
-        parts = ai_response.split("### ")
-        
-        print(f"[AGENT] Parsing response into files...", flush=True)
-
-        allowed_files = set(self.TARGET_FILES)
-
-        for part in parts:
-            if not part.strip():
-                continue
-
-            lines = part.split("\n", 1)
-            if len(lines) >= 1:
-                filename = lines[0].strip()
-                if "/" in filename:
-                    filename = filename.split("/")[-1]
-                if filename.endswith(" ###"):
-                    filename = filename[:-4].strip()
-
-                content = lines[1] if len(lines) > 1 else ""
-
-                if filename and content:
-                    if filename not in allowed_files:
-                        bt.logging.warning(f"Ignoring non-target filename from agent output: {filename}")
-                        print(f"[AGENT] Ignoring non-target filename: {filename}", flush=True)
-                        continue
-
-                    files[filename] = content
-                    print(f"[AGENT] Parsed file: {filename} ({len(content)} chars)", flush=True)
-                    bt.logging.info(f"Parsed optimized file: {filename} ({len(content)} chars)")
-
-        print(f"[AGENT] Total files parsed: {len(files)}", flush=True)
-
-        # Fallback: if the model returned raw python without a "### chunk.py ###" header
-        # and we are only optimizing a single file (e.g., test-mode), treat the remaining
-        # content as that file.
-        if not files and len(allowed_files) == 1:
-            only_file = next(iter(allowed_files))
-            candidate = ai_response.strip()
-
-            # Heuristic: start from first import/from statement if the model prefixed extra text.
-            m = re.search(r"(^|\n)(import\s+\w+|from\s+\w+)", candidate)
-            if m:
-                candidate = candidate[m.start(2):].lstrip()
-
-            if "def " in candidate and ("import " in candidate or "from " in candidate):
-                files[only_file] = candidate
-                print(f"[AGENT] Fallback parsed file: {only_file} ({len(candidate)} chars)", flush=True)
-
-        return files
-
-    def write_optimized_files(self, repo_path: str, optimized_files: Dict[str, str]) -> List[str]:
-        """Write optimized files to repository."""
-        import re
-
-        modified_files = []
-
-        allowed_files = set(self.TARGET_FILES)
-
-        for filename, content in optimized_files.items():
-            if filename not in allowed_files:
-                bt.logging.warning(f"Skipping non-target filename: {filename}")
-                print(f"[FILE] Skipping non-target filename: {filename}", flush=True)
-                continue
-
-            content = re.sub(r"</?\s*OPTIMIZED_CONTENT\s*>\s*", "", content, flags=re.DOTALL | re.IGNORECASE)
-            content = re.sub(r"^\s*<\s*/?\s*[A-Za-z0-9_:\-]+\s*>\s*$", "", content, flags=re.MULTILINE)
-
-            file_path = os.path.join(repo_path, "fla/ops/quasar", filename)
-
-            if not file_path.startswith(os.path.join(repo_path, "fla/ops/quasar")):
-                bt.logging.warning(f"Skipping file outside quasar directory: {file_path}")
-                continue
-
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    old_content = f.read()
-                if old_content == content:
-                    print(f"[FILE] No change for {filename}; skipping write", flush=True)
-                    continue
-
-                print(f"[FILE] Backing up old {filename} ({len(old_content)} chars)", flush=True)
-            
-            # Write new content
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            modified_files.append(filename)
-            bt.logging.info(f"Wrote optimized file: {filename}")
-            print(f"[FILE] Replaced {filename} with new content ({len(content)} chars)", flush=True)
-        
-        return modified_files
-
-    def run_tests(self, repo_path: str, sequence_length: int = None) -> Dict[str, float]:
-        """Run tests on the optimized code.
-
-        Returns:
-            Dict with keys: tokens_per_sec, vram_mb
-        """
-        if sequence_length is None:
-            sequence_length = self.target_sequence_length
-        
-        # Create temporary test script with target sequence length
-        temp_test_script = os.path.join(repo_path, "test_temp.py")
-        with open(temp_test_script, 'w') as f:
-            f.write(f"""
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# Enable verbose logging for Triton kernel compilation
-os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
-os.environ["TRITON_PRINT_DEBUG"] = "1"
-
-import torch
-from fla.layers.quasar import QuasarAttention
-
-def test_quasar():
-    import gc
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    batch_size = 1
-    seq_len = {sequence_length}
-    hidden_size = 512
-    head_dim = 64
-    num_heads = 8
-
-    # Clear GPU cache before creating model
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    quasar = QuasarAttention(
-        hidden_size=hidden_size,
-        head_dim=head_dim,
-        num_heads=num_heads,
-        mode="chunk",
-        use_short_conv=True,
-    ).to(device)
-
-    x = torch.randn(batch_size, seq_len, hidden_size, device=device)
-
-    if device.type == "cuda":
-        torch.cuda.reset_peak_memory_stats()
-
-    # Warmup
-    for _ in range(3):
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
-            _ = quasar(x)
-
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-
-    # Clear cache before benchmark
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    # Benchmark
-    import time
-    num_runs = 10
-    start = time.time()
-
-    for _ in range(num_runs):
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
-            _ = quasar(x)
-
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-
-    elapsed = time.time() - start
-    tokens_per_sec = (batch_size * seq_len * num_runs) / elapsed
-
-    vram_bytes = 0
-    if device.type == "cuda":
-        vram_bytes = torch.cuda.max_memory_allocated()
-    vram_mb = vram_bytes / (1024 * 1024)
-    
-    print(f"RESULT: {{tokens_per_sec:.2f}}")
-    print(f"VRAM_MB: {{vram_mb:.2f}}")
-    return {{'tokens_per_sec': tokens_per_sec, 'vram_mb': vram_mb}}
-
-if __name__ == "__main__":
-    tps = test_quasar()
-    print(f"Tokens/sec: {{tps['tokens_per_sec']:.2f}}")
-    print(f"VRAM_MB: {{tps['vram_mb']:.2f}}")
-""")
-        
-        # Run test
-        bt.logging.info(f"Running tests for sequence length {sequence_length}...")
-        print(f"[TEST] Running tests for sequence length {sequence_length}...", flush=True)
-        
-        try:
-            result = subprocess.run(
-                [sys.executable, temp_test_script],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            
-            output = result.stdout + result.stderr
-            
-            tokens_per_sec = 0.0
-            vram_mb = 0.0
-            for line in output.split('\n'):
-                if "RESULT:" in line:
-                    tokens_per_sec = float(line.split("RESULT:")[1].strip())
-                if "VRAM_MB:" in line:
-                    vram_mb = float(line.split("VRAM_MB:")[1].strip())
-
-            if tokens_per_sec > 0:
-                print(f"[TEST] Tokens/sec: {tokens_per_sec:.2f} | VRAM: {vram_mb:.2f} MB", flush=True)
-                return {"tokens_per_sec": tokens_per_sec, "vram_mb": vram_mb}
-            
-            bt.logging.warning(f"Could not parse test results: {output}")
-            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
-            
-        except subprocess.TimeoutExpired:
-            bt.logging.error("Test timed out (300s)")
-            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
-        except Exception as e:
-            bt.logging.error(f"Test failed: {e}")
-            return {"tokens_per_sec": 0.0, "vram_mb": 0.0}
-        finally:
-            # Clean up temp test script
-            if os.path.exists(temp_test_script):
-                os.remove(temp_test_script)
-
-    def run_benchmarks(self, repo_path: str, sequence_lengths: List[int]) -> Dict[int, Dict[str, float]]:
-        results: Dict[int, Dict[str, float]] = {}
-        for seq_len in sequence_lengths:
-            results[int(seq_len)] = self.run_tests(repo_path, int(seq_len))
-        return results
 
     def get_commit_hash(self, repo_path: str) -> str:
         """Get the current commit hash."""
@@ -886,80 +239,6 @@ if __name__ == "__main__":
         )
         return result.stdout.strip()
 
-    def commit_and_push(self, repo_path: str, message: str) -> bool:
-        """Commit and push changes to fork."""
-        try:
-            bt.logging.info(f"Committing changes: {message}")
-            print(f"[GIT] Committing changes...", flush=True)
-            
-            # Set git config for this repository
-            subprocess.run(
-                ["git", "config", "user.email", "quasar-miner@example.com"],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Quasar Miner"],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            
-            # Add and commit changes
-            subprocess.run(
-                ["git", "add", "fla/ops/quasar/"],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            
-            subprocess.run(
-                ["git", "commit", "-m", message],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            
-            # Get current remote URL
-            result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True
-            )
-            current_url = result.stdout.strip()
-            
-            # Update remote URL with token for authentication
-            if current_url.startswith("https://"):
-                # Extract the repository part from URL
-                repo_part = current_url.replace("https://", "")
-                if "/" in repo_part:
-                    owner_repo = repo_part.split("/", 1)[1]  # Get owner/repo part
-                    new_url = f"https://{self.github_username}:{self.github_token}@github.com/{owner_repo}"
-                    
-                    # Set the new remote URL
-                    subprocess.run(
-                        ["git", "remote", "set-url", "origin", new_url],
-                        cwd=repo_path,
-                        check=True,
-                        capture_output=True
-                    )
-            
-            # Push using the authenticated remote URL
-            subprocess.run(
-                ["git", "push"],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            
-            print(f"[GIT] Changes pushed successfully", flush=True)
-            return True
-        except Exception as e:
-            bt.logging.error(f"Failed to commit and push: {e}")
-            print(f"[GIT] Failed to commit and push: {e}", flush=True)
-            return False
 
     def submit_to_validator(self, fork_url: str, commit_hash: str, performance: float, benchmarks: Optional[Dict[int, Dict[str, float]]] = None) -> bool:
         """Submit optimization results to validator API."""
@@ -1047,105 +326,296 @@ if __name__ == "__main__":
             print(f"[API] Submission failed: {e}", flush=True)
             return False
 
-    # ... (rest of the code remains the same)
 
     def run_optimization_loop(self, fork_url: str, repo_path: str):
-        """Run the continuous optimization loop with agents."""
-        bt.logging.info("Starting optimization loop...")
-        print(f"\n[LOOP] Starting optimization loop (iterations: {self.agent_iterations})...", flush=True)
-        
-        best_performance = 0.0
-        best_commit = None
-        
+        """Run the main optimization loop."""
+        import re
+        from threading import Thread
+
+        print(f"[MINER] Starting optimization loop...", flush=True)
+        bt.logging.info("Starting optimization loop")
+
         for iteration in range(self.agent_iterations):
-            if self.should_exit:
-                break
+            print(f"\n[MINER] --- Iteration {iteration + 1}/{self.agent_iterations} ---", flush=True)
             
-            print(f"\n[LOOP] ========== Iteration {iteration + 1}/{self.agent_iterations} ==========", flush=True)
-            
-            # Read current code
-            codebase = self.read_target_files(repo_path)
-            
-            # Run agent optimization
-            try:
-                optimized_files = self.run_agent_optimization(codebase, iteration + 1)
-                
-                if not optimized_files:
-                    print(f"[LOOP] No optimizations generated, skipping...", flush=True)
-                    continue
+            # Read current files
+            file_contents = {}
+            for filename in self.TARGET_FILES:
+                filepath = os.path.join(repo_path, "fla", "ops", "quasar", filename)
+                if os.path.exists(filepath):
+                    with open(filepath, 'r') as f:
+                        file_contents[filename] = f.read()
 
-                # Filter out no-op outputs (agent returned identical file content)
-                changed_files: Dict[str, str] = {}
-                for filename, content in optimized_files.items():
-                    if filename in codebase and content != codebase[filename]:
-                        changed_files[filename] = content
+            # Construct prompt
+            system_prompt = (
+                "You are an expert AI kernel engineer specializing in Triton and PyTorch optimization. "
+                "Your goal is to optimize the Quasar Attention mechanism in `chunk.py` by improving performance.\n"
+                "CRITICAL RULES:\n"
+                "1. DO NOT add any new imports. Use only the existing imports in the file.\n"
+                "2. DO NOT try to import `fused_quasar_gate` - it does not exist.\n"
+                "3. Focus on optimizing the existing PyTorch operations with better Triton kernel usage.\n"
+                "4. The file MUST preserve ALL existing imports:\n"
+                "   - import torch\n"
+                "   - import triton\n"
+                "   - import torch.nn.functional as F\n"
+                "   - from fla.ops.utils.index import prepare_chunk_indices\n"
+                "   - from fla.ops.quasar.forward_substitution import forward_substitution_kernel\n"
+                "   - from fla.utils import IS_AMD, autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, check_shared_mem, input_guard\n"
+                "5. The file MUST keep this structure:\n"
+                "   - All imports\n"
+                "   - BS_LIST, BT_LIST_AUTOTUNE, NUM_WARPS_AUTOTUNE constants\n"
+                "   - chunk_quasar_fwd function\n"
+                "   - ChunkQuasarFunction class\n"
+                "   - chunk_quasar wrapper function\n"
+                "6. DO NOT delete ChunkQuasarFunction class or chunk_quasar function.\n"
+                "7. Optimize by improving kernel calls, memory usage, or computation efficiency.\n"
+                "8. Keep all existing functionality - just make it faster.\n"
+                "Output the FULL file content using:\n"
+                "```python:chunk.py\n...content...\n```"
+                "Do not omit any code. The file must be complete and runnable."
+            )
 
-                if not changed_files:
-                    print(f"[LOOP] Agent returned no actual code changes (identical output); skipping...", flush=True)
-                    continue
+            user_prompt = "Here are the current files:\n\n"
+            for fname, content in file_contents.items():
+                if fname in ["chunk.py", "fused_recurrent.py", "gate.py"]:
+                    user_prompt += f"=== {fname} ===\n{content}\n\n"
+            
+            user_prompt += (
+                "Please rewrite `chunk.py` and `fused_recurrent.py` to use the kernelized gate mechanism from `gate.py`. "
+                "Remove the pure PyTorch alpha/beta computation."
+            )
+
+            # Generate code with streaming
+            # We wrap this in a retry loop to handle test failures
+            max_retries = 3
+            success = False
+            previous_error = None
+
+            for attempt in range(max_retries):
+                # Clear memory
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+
+                if attempt > 0:
+                    print(f"\n[MINER] --- Attempt {attempt + 1}/{max_retries} (Retry with feedback) ---", flush=True)
+
+                # Construct messages afresh to save context window
+                # We start with the base prompts
+                current_system_prompt = system_prompt
+                current_user_prompt = user_prompt
                 
-                # Write optimized files (with import validation)
-                try:
-                    modified_files = self.write_optimized_files(repo_path, changed_files)
-                    print(f"[LOOP] Modified {len(modified_files)} files", flush=True)
-                    if not modified_files:
-                        print(f"[LOOP] No files changed on disk; skipping tests...", flush=True)
-                        continue
-                except ImportError as e:
-                    print(f"[LOOP] Import validation failed, reverting changes: {e}", flush=True)
-                    subprocess.run(["git", "checkout", "--", "fla/ops/quasar/"], cwd=repo_path, capture_output=True)
-                    continue
+                # If we have a previous error, append it to the user prompt to give feedback
+                # WITHOUT keeping the entire previous failed conversation history
+                if previous_error:
+                    current_user_prompt += f"\n\nIMPORTANT: The previous code generation failed with the following error:\n{previous_error}\n\nPlease fix this error and output the FULL corrected code for `chunk.py` and `fused_recurrent.py`."
+
+                messages = [
+                    {"role": "system", "content": current_system_prompt},
+                    {"role": "user", "content": current_user_prompt}
+                ]
                 
-                # Run tests
-                target_metrics = self.run_tests(repo_path, self.target_sequence_length)
-                performance = float(target_metrics.get("tokens_per_sec", 0.0))
+                print(f"[MINER] Generating code...", flush=True)
                 
-                if performance <= 0:
-                    print(f"[LOOP] Tests failed, reverting changes...", flush=True)
-                    subprocess.run(["git", "checkout", "--", "fla/ops/quasar/"], cwd=repo_path, capture_output=True)
-                    continue
+                input_ids = self.tokenizer.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True).to(self.device)
                 
-                print(f"[LOOP] Performance: {performance:.2f} tokens/sec", flush=True)
+                streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, decode_kwargs={"skip_special_tokens": True})
+                generation_kwargs = dict(
+                    input_ids=input_ids,
+                    streamer=streamer,
+                    max_new_tokens=self.agent_max_new_tokens,
+                    temperature=0.7,
+                )
                 
-                # Check if this is the best performance
-                if performance > best_performance:
-                    best_performance = performance
-                    commit_message = f"Optimization iteration {iteration + 1}: {performance:.2f} tokens/sec @ seq_len={self.target_sequence_length}"
+                thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+                thread.start()
+
+                accumulated_response = ""
+                for new_text in streamer:
+                    print(new_text, end="", flush=True)
+                    accumulated_response += new_text
+                thread.join()
+                print() 
+
+                # Parse and apply changes
+                # Strategy 1: Look for explicit filename in code block tag
+                pattern_strict = r"```python:([a-zA-Z0-9_]+\.py)\n(.*?)```"
+                matches_strict = list(re.finditer(pattern_strict, accumulated_response, re.DOTALL))
+                
+                # Strategy 2: Look for standard python blocks and infer filename from content
+                pattern_lax = r"```python\n(.*?)```"
+                matches_lax = list(re.finditer(pattern_lax, accumulated_response, re.DOTALL))
+                
+                modified_files = set()
+                import difflib
+
+                def apply_update_with_diff(fname, new_content):
+                    f_path = os.path.join(repo_path, "fla", "ops", "quasar", fname)
+                    old_code = ""
+                    if os.path.exists(f_path):
+                        with open(f_path, 'r') as f:
+                            old_code = f.read()
                     
-                    if self.commit_and_push(repo_path, commit_message):
-                        best_commit = self.get_commit_hash(repo_path)
-                        print(f"[LOOP] New best performance! Commit: {best_commit}", flush=True)
+                    print(f"\n[MINER] Diff for {fname}:", flush=True)
+                    diff_generator = difflib.unified_diff(
+                        old_code.splitlines(keepends=True),
+                        new_content.splitlines(keepends=True),
+                        fromfile=f"current/{fname}",
+                        tofile=f"new/{fname}",
+                        n=3
+                    )
+                    diff_text = "".join(diff_generator)
+                    if diff_text:
+                        print(diff_text, flush=True)
+                    else:
+                        print("(No changes)", flush=True)
+                    
+                    line_count = len(new_content.splitlines())
+                    print(f"[MINER] New file has {line_count} lines", flush=True)
 
-                        seq_lengths = list(self.REPORT_SEQUENCE_LENGTHS)
-                        if int(self.target_sequence_length) not in seq_lengths:
-                            seq_lengths.append(int(self.target_sequence_length))
-                        print(f"[TEST] Running full benchmark suite: {seq_lengths}", flush=True)
+                    with open(f_path, 'w') as f:
+                        f.write(new_content)
 
-                        benchmarks = self.run_benchmarks(repo_path, seq_lengths)
-                        if any(float(m.get("tokens_per_sec", 0.0)) <= 0.0 for m in benchmarks.values()):
-                            print(f"[TEST] One or more benchmarks failed, skipping submission", flush=True)
-                        else:
-                            submission_performance = float(benchmarks.get(int(self.target_sequence_length), {}).get("tokens_per_sec", best_performance))
-                            self.submit_to_validator(fork_url, best_commit, submission_performance, benchmarks)
+                # Process strict matches first
+                for match in matches_strict:
+                    filename = match.group(1)
+                    content = match.group(2)
+                    if filename in self.TARGET_FILES:
+                         apply_update_with_diff(filename, content)
+                         print(f"[MINER] Updated {filename} (strict match)", flush=True)
+                         modified_files.add(filename)
+
+                # Process lax matches if we haven't found everything
+                for match in matches_lax:
+                    content = match.group(1)
+                    filename = None
+                    
+                    # Heuristic content matching
+                    if "def chunk_quasar_fwd" in content or "class ChunkQuasarFunction" in content:
+                        filename = "chunk.py"
+                    elif "def fused_recurrent_quasar_fwd" in content or "class FusedRecurrentQuasarFunction" in content:
+                        filename = "fused_recurrent.py"
+                    elif "def fused_quasar_gate" in content or "def quasar_gate_fwd" in content:
+                        filename = "gate.py"
+                    elif "def forward_substitution" in content:
+                        filename = "forward_substitution.py"
+                    
+                    if filename and filename in self.TARGET_FILES and filename not in modified_files:
+                         apply_update_with_diff(filename, content)
+                         print(f"[MINER] Updated {filename} (inferred from content)", flush=True)
+                         modified_files.add(filename)
+                
+                if not modified_files:
+                    print("[MINER] No valid files generated. Adding feedback and retrying...", flush=True)
+                    previous_error = "You did not generate any valid code blocks. Please output the full code for `chunk.py` and `fused_recurrent.py` using ```python:filename.py``` blocks. Ensure you provide the COMPLETE file content."
+                    continue
+
+                # Install and Test
+                try:
+                    print("[MINER] Installing package...", flush=True)
+                    # Ensure we are in the repo path
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install", "-e", "."],
+                        cwd=repo_path,
+                        check=True,
+                        capture_output=True
+                    )
+                    
+                    print("[MINER] Running tests...", flush=True)
+                    # Location of the test script we created
+                    test_script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tests", "test_quasar_mining.py")
+                    if not os.path.exists(test_script_path):
+                         # Fallback to current dir / tests
+                         test_script_path = os.path.abspath("tests/test_quasar_mining.py")
+
+                    result = subprocess.run(
+                        [sys.executable, test_script_path],
+                        cwd=repo_path, 
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if result.returncode != 0:
+                        print(f"[MINER] Tests Failed:\n{result.stderr}", flush=True)
+                        # Set error for next attempt
+                        previous_error = f"The code failed to run. Error output:\n{result.stderr}\n\nPlease fix the errors (check your imports!) and provide the full corrected code."
+                        continue # Retry
+                    else:
+                        print(result.stdout)
+                        print(f"[MINER] Tests Passed!", flush=True)
+                        # Extract score
+                        tps_match = re.search(r"QuasarAttention achieved: (\d+) tokens/sec", result.stdout)
+                        if tps_match:
+                            score = float(tps_match.group(1))
+                            bt.logging.info(f"Iteration {iteration} score: {score}")
+                            print(f"[MINER] Benchmark Score: {score} tokens/sec")
+                            
+                            # Submit
+                            commit_hash = self.get_commit_hash(repo_path)
+                            self.submit_to_validator(fork_url, commit_hash, score)
+                            success = True
+                            break # Success, exit retry loop
+                            
+                except Exception as e:
+                    print(f"[MINER] Error during build/test: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    messages.append({"role": "user", "content": f"System error during build/test: {e}"})
+
+            if not success:
+                print(f"[MINER] Optimization failed after {max_retries} attempts. Continuing to next iteration...", flush=True)
+
+            # Install and Test
+            try:
+                print("[MINER] Installing package...", flush=True)
+                # Ensure we are in the repo path
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-e", "."],
+                    cwd=repo_path,
+                    check=True,
+                    capture_output=True
+                )
+                
+                print("[MINER] Running tests...", flush=True)
+                # Location of the test script we created
+                # It is likely in c:\quasar-kimi\tests\test_quasar_mining.py
+                # We need to find absolute path
+                test_script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tests", "test_quasar_mining.py")
+                if not os.path.exists(test_script_path):
+                     # Fallback to current dir / tests
+                     test_script_path = os.path.abspath("tests/test_quasar_mining.py")
+
+                result = subprocess.run(
+                    [sys.executable, test_script_path],
+                    cwd=repo_path, 
+                    capture_output=True,
+                    text=True
+                )
+                
+                print(result.stdout)
+                if result.returncode != 0:
+                    print(f"[MINER] Tests Failed:\n{result.stderr}", flush=True)
                 else:
-                    print(f"[LOOP] Performance not improved, reverting changes...", flush=True)
-                    subprocess.run(["git", "checkout", "--", "fla/ops/quasar/"], cwd=repo_path, capture_output=True)
-                
-                self.optimization_iterations += 1
-                
+                    print(f"[MINER] Tests Passed!", flush=True)
+                    # Extract score
+                    tps_match = re.search(r"QuasarAttention achieved: (\d+) tokens/sec", result.stdout)
+                    if tps_match:
+                        score = float(tps_match.group(1))
+                        bt.logging.info(f"Iteration {iteration} score: {score}")
+                        print(f"[MINER] Benchmark Score: {score} tokens/sec")
+                        
+                        # Submit
+                        commit_hash = self.get_commit_hash(repo_path)
+                        self.submit_to_validator(fork_url, commit_hash, score)
+                        
             except Exception as e:
-                bt.logging.error(f"Error in iteration {iteration + 1}: {e}")
-                print(f"[LOOP] Error: {e}", flush=True)
-                subprocess.run(["git", "checkout", "--", "fla/ops/quasar/"], cwd=repo_path, capture_output=True)
-            
-            # Wait before next iteration
-            if iteration < self.agent_iterations - 1:
-                print(f"[LOOP] Waiting {self.optimization_interval}s before next iteration...", flush=True)
-                time.sleep(self.optimization_interval)
-        
-        print(f"\n[LOOP] Optimization loop completed", flush=True)
-        print(f"[LOOP] Best performance: {best_performance:.2f} tokens/sec", flush=True)
-        print(f"[LOOP] Best commit: {best_commit}", flush=True)
+                print(f"[MINER] Error during build/test: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+
+            print(f"[MINER] Waiting {self.optimization_interval}s...", flush=True)
+            time.sleep(self.optimization_interval)
 
     def run_miner(self):
         """Main miner entry point."""
@@ -1204,8 +674,8 @@ if __name__ == "__main__":
                        help="Target sequence length (default: 100000)")
     parser.add_argument("--optimization-interval", type=float, default=300,
                        help="Interval between iterations in seconds (default: 300)")
-    parser.add_argument("--model-name", type=str, default="silx-ai/Quasar-2M-Base",
-                       help="Model name to use for optimization (default: silx-ai/Quasar-2M-Base)")
+    parser.add_argument("--model-name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
+                       help="Model name to use for optimization (default: Qwen/Qwen2.5-0.5B-Instruct)")
     parser.add_argument("--test-mode", action="store_true",
                        help="Test mode: only optimize chunk.py for quick testing")
     parser.add_argument("--wallet.name", type=str, default="default",
