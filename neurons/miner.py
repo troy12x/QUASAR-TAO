@@ -348,31 +348,21 @@ class Miner(BaseMinerNeuron):
 
             # Construct prompt
             system_prompt = (
-                "You are an expert AI kernel engineer specializing in Triton and PyTorch optimization. "
-                "Your goal is to optimize the Quasar Attention mechanism in `chunk.py` by improving performance.\n"
-                "CRITICAL RULES:\n"
-                "1. DO NOT add any new imports. Use only the existing imports in the file.\n"
-                "2. DO NOT try to import `fused_quasar_gate` - it does not exist.\n"
-                "3. Focus on optimizing the existing PyTorch operations with better Triton kernel usage.\n"
-                "4. The file MUST preserve ALL existing imports:\n"
-                "   - import torch\n"
-                "   - import triton\n"
-                "   - import torch.nn.functional as F\n"
-                "   - from fla.ops.utils.index import prepare_chunk_indices\n"
-                "   - from fla.ops.quasar.forward_substitution import forward_substitution_kernel\n"
-                "   - from fla.utils import IS_AMD, autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, check_shared_mem, input_guard\n"
-                "5. The file MUST keep this structure:\n"
-                "   - All imports\n"
-                "   - BS_LIST, BT_LIST_AUTOTUNE, NUM_WARPS_AUTOTUNE constants\n"
-                "   - chunk_quasar_fwd function\n"
-                "   - ChunkQuasarFunction class\n"
-                "   - chunk_quasar wrapper function\n"
-                "6. DO NOT delete ChunkQuasarFunction class or chunk_quasar function.\n"
-                "7. Optimize by improving kernel calls, memory usage, or computation efficiency.\n"
-                "8. Keep all existing functionality - just make it faster.\n"
-                "Output the FULL file content using:\n"
-                "```python:chunk.py\n...content...\n```"
-                "Do not omit any code. The file must be complete and runnable."
+                "You are an expert AI kernel engineer optimizing Quasar Attention.\n"
+                "CRITICAL OUTPUT FORMAT:\n"
+                "You MUST wrap your code in markdown code blocks like this example:\n\n"
+                "```python:chunk.py\n"
+                "import torch\n"
+                "import triton\n"
+                "# ... rest of the code ...\n"
+                "```\n\n"
+                "RULES:\n"
+                "1. DO NOT add new imports\n"
+                "2. DO NOT import fused_quasar_gate\n"
+                "3. Keep ALL existing imports\n"
+                "4. MUST include: chunk_quasar_fwd, ChunkQuasarFunction, chunk_quasar\n"
+                "5. The code fence line is NOT Python code - it's markdown formatting\n"
+                "6. Start your actual Python code on the line AFTER the fence\n"
             )
 
             user_prompt = "Here are the current files:\n\n"
@@ -387,7 +377,7 @@ class Miner(BaseMinerNeuron):
 
             # Generate code with streaming
             # We wrap this in a retry loop to handle test failures
-            max_retries = 3
+            max_retries = 10  # Increased from 3 to give model more chances to fix errors
             success = False
             previous_error = None
 
@@ -409,7 +399,19 @@ class Miner(BaseMinerNeuron):
                 # If we have a previous error, append it to the user prompt to give feedback
                 # WITHOUT keeping the entire previous failed conversation history
                 if previous_error:
-                    current_user_prompt += f"\n\nIMPORTANT: The previous code generation failed with the following error:\n{previous_error}\n\nPlease fix this error and output the FULL corrected code for `chunk.py` and `fused_recurrent.py`."
+                    current_user_prompt = (
+                        f"The code you generated has an error. Here is the CURRENT broken file:\n\n"
+                        f"=== chunk.py (CURRENT - HAS ERRORS) ===\n"
+                        f"{file_contents.get('chunk.py', '')}\n\n"
+                        f"ERROR FROM RUNNING TESTS:\n{previous_error}\n\n"
+                        f"CRITICAL INSTRUCTIONS:\n"
+                        f"1. Look at the error trace carefully\n"
+                        f"2. Find the EXACT line causing the error\n"
+                        f"3. Fix ONLY that specific issue\n"
+                        f"4. Output the COMPLETE corrected file (don't skip any parts)\n"
+                        f"5. Keep ALL imports and ALL functions intact\n"
+                        f"6. Make MINIMAL changes - only fix the error\n"
+                    )
 
                 messages = [
                     {"role": "system", "content": current_system_prompt},
@@ -437,10 +439,25 @@ class Miner(BaseMinerNeuron):
                     accumulated_response += new_text
                 thread.join()
                 print() 
+                
+                # Aggressively clear GPU memory after generation
+                print("[MINER] Clearing GPU memory...", flush=True)
+                del input_ids
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                import gc
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                print(f"[MINER] GPU memory cleared. Free: {torch.cuda.mem_get_info()[0] / 1024**3:.2f} GB", flush=True)
+
+ 
 
                 # Parse and apply changes
                 # Strategy 1: Look for explicit filename in code block tag
-                pattern_strict = r"```python:([a-zA-Z0-9_]+\.py)\n(.*?)```"
+                # Updated regex to handle trailing chars after filename on the code fence line
+                pattern_strict = r"```python:([a-zA-Z0-9_]+\.py).*?\n(.*?)```"
                 matches_strict = list(re.finditer(pattern_strict, accumulated_response, re.DOTALL))
                 
                 # Strategy 2: Look for standard python blocks and infer filename from content
@@ -538,8 +555,13 @@ class Miner(BaseMinerNeuron):
                     
                     if result.returncode != 0:
                         print(f"[MINER] Tests Failed:\n{result.stderr}", flush=True)
-                        # Set error for next attempt
-                        previous_error = f"The code failed to run. Error output:\n{result.stderr}\n\nPlease fix the errors (check your imports!) and provide the full corrected code."
+                        # Set error for next attempt with BOTH stdout and stderr for context
+                        previous_error = (
+                            f"The code failed to run.\n"
+                            f"STDOUT:\n{result.stdout}\n"
+                            f"STDERR:\n{result.stderr}\n\n"
+                            f"CRITICAL: Fix the specific error shown above. deeply analyze the trace and correct your code."
+                        )
                         continue # Retry
                     else:
                         print(result.stdout)
