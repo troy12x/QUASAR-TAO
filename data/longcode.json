@@ -1,0 +1,133 @@
+[
+  {
+    "id": 0,
+    "context_length": "8K~16K",
+    "prompt": "You are an expert Python programmer. Write a function `extract_doc_changes(code)` that analyzes Python source code and extracts lines where the value of a `doc` variable changes.\n\nRequirements:\n- Only extract lines where `doc = ` appears as an assignment\n- Ignore lines where `doc` is just referenced (e.g., `doc.to_mongo()`, `not doc`)\n- Return a list of stripped code lines in the order they appear\n- Handle multi-line assignments (ignore them for now)\n\nWrite your function below:",
+    "template_code": "def extract_doc_changes(code):\n    \"\"\"Extract lines where doc variable changes in Python code.\n    \n    Args:\n        code: Python source code as string\n    \n    Returns:\n        List of code lines where doc is assigned\n    \"\"\"\n    # Your implementation here\n    pass",
+    "test_cases": [
+      {
+        "input_code": "def test_allow_inheritance_abstract_document(self):\n    \"\"\"Ensure that abstract documents can set inheritance rules.\"\"\"\n    class FinalDocument(Document):\n        meta = {\"abstract\": True, \"allow_inheritance\": False}\n    class Animal(FinalDocument):\n        name = StringField()\n    with pytest.raises(ValueError):\n        class Mammal(Animal):\n            pass\n    doc = Animal(name=\"dog\")\n    assert \"_cls\" not in doc.to_mongo()",
+        "expected_output": ["doc = Animal(name=\"dog\")"]
+      },
+      {
+        "input_code": "def test_multiple_doc_assignments(self):\n    \"\"\"Test multiple doc variable assignments.\"\"\"\n    doc = Document()\n    doc.save()\n    doc = Animal(name=\"cat\")\n    doc.save()\n    doc = Mammal(name=\"lion\")\n    assert doc.name == \"lion\"",
+        "expected_output": ["doc = Document()", "doc = Animal(name=\"cat\")", "doc = Mammal(name=\"lion\")"]
+      },
+      {
+        "input_code": "def test_no_doc_changes(self):\n    \"\"\"Test case with no doc variable changes.\"\"\"\n    class TestClass:\n        pass\n    obj = TestClass()\n    obj.method()\n    assert obj is not None",
+        "expected_output": []
+      },
+      {
+        "input_code": "def test_doc_references_only(self):\n    \"\"\"Test that doc references are not captured.\"\"\"\n    doc = Document()\n    result = doc.to_mongo()\n    if not doc:\n        return None\n    print(doc)",
+        "expected_output": ["doc = Document()"]
+      }
+    ],
+    "timeout": 30
+  },
+  {
+    "id": 1,
+    "context_length": "16K~32K",
+    "prompt": "You are an expert Python programmer. Write a function `find_function_signatures(code)` that extracts all function definitions from Python source code.\n\nRequirements:\n- Extract function name, parameters, and return type annotation (if any)\n- Handle both `def func():` and `async def func():`\n- Return a list of dictionaries with keys: 'name', 'params', 'is_async', 'return_type'\n- Handle complex parameter lists with defaults, type hints, and *args/**kwargs\n- Ignore nested functions (only top-level functions)\n\nWrite your function below:",
+    "template_code": "def find_function_signatures(code):\n    \"\"\"Extract function signatures from Python source code.\n    \n    Args:\n        code: Python source code as string\n    \n    Returns:\n        List of dicts with function signature info\n    \"\"\"\n    # Your implementation here\n    pass",
+    "test_cases": [
+      {
+        "input_code": "def simple_function():\n    pass\n\nasync def async_function():\n    pass\n\ndef function_with_params(a, b, c):\n    pass",
+        "expected_output": [
+          {"name": "simple_function", "params": [], "is_async": false, "return_type": null},
+          {"name": "async_function", "params": [], "is_async": true, "return_type": null},
+          {"name": "function_with_params", "params": ["a", "b", "c"], "is_async": false, "return_type": null}
+        ]
+      },
+      {
+        "input_code": "def complex_function(a: int, b: str = \"default\", *args, **kwargs) -> bool:\n    return True\n\nclass MyClass:\n    def method(self):\n        pass",
+        "expected_output": [
+          {"name": "complex_function", "params": ["a: int", "b: str = \"default\"", "*args", "**kwargs"], "is_async": false, "return_type": "bool"}
+        ]
+      },
+      {
+        "input_code": "# Just comments\n\"\"\"Module docstring\"\"\"\n\n# No functions here\nx = 1",
+        "expected_output": []
+      }
+    ],
+    "timeout": 45
+  },
+  {
+    "id": 2,
+    "context_length": "32K~64K",
+    "prompt": "You are an expert Python programmer. Write a function `analyze_imports(code)` that analyzes Python source code and categorizes all import statements.\n\nRequirements:\n- Categorize imports into: 'standard_library', 'third_party', 'local'\n- For standard library imports, use the Python stdlib list\n- For third party, assume anything not in stdlib is third party\n- For local, detect relative imports (from . import x) and imports from the same package\n- Track both `import x` and `from x import y` formats\n- Return a dict with counts for each category and lists of module names\n- Handle `import x as y` and `from x import y as z`\n\nWrite your function below:",
+    "template_code": "def analyze_imports(code):\n    \"\"\"Analyze and categorize import statements in Python code.\n    \n    Args:\n        code: Python source code as string\n    \n    Returns:\n        Dict with 'standard_library', 'third_party', 'local' categories\n    \"\"\"\n    # Your implementation here\n    pass",
+    "test_cases": [
+      {
+        "input_code": "import os\nimport sys\nimport numpy as np\nfrom collections import defaultdict\nfrom .utils import helper\nfrom mypackage import config\nimport pandas as pd",
+        "expected_output": {
+          "standard_library": ["os", "sys", "collections"],
+          "third_party": ["numpy", "pandas"],
+          "local": [".utils", "mypackage"]
+        }
+      },
+      {
+        "input_code": "# No imports\n\ndef function():\n    pass",
+        "expected_output": {
+          "standard_library": [],
+          "third_party": [],
+          "local": []
+        }
+      }
+    ],
+    "timeout": 60
+  },
+  {
+    "id": 3,
+    "context_length": "64K~128K",
+    "prompt": "You are an expert Python programmer. Write a function `extract_class_hierarchy(code)` that builds a class inheritance hierarchy from Python source code.\n\nRequirements:\n- Extract all class definitions and their parent classes\n- Handle multiple inheritance (class Child(Parent1, Parent2))\n- Handle inheritance from built-in types and mixins\n- Return a dict mapping class names to list of parent class names\n- Handle classes with no explicit parents (implicitly inherit from object)\n- Ignore nested classes (only top-level classes)\n- Track the order of inheritance (important for MRO)\n\nWrite your function below:",
+    "template_code": "def extract_class_hierarchy(code):\n    \"\"\"Extract class inheritance hierarchy from Python source code.\n    \n    Args:\n        code: Python source code as string\n    \n    Returns:\n        Dict mapping class names to list of parent class names\n    \"\"\"\n    # Your implementation here\n    pass",
+    "test_cases": [
+      {
+        "input_code": "class Animal:\n    pass\n\nclass Mammal(Animal):\n    pass\n\nclass Dog(Mammal):\n    pass\n\nclass Cat(Mammal):\n    pass\n\nclass FlyingFish(Animal, Swimmer):\n    pass",
+        "expected_output": {
+          "Animal": ["object"],
+          "Mammal": ["Animal"],
+          "Dog": ["Mammal"],
+          "Cat": ["Mammal"],
+          "FlyingFish": ["Animal", "Swimmer"]
+        }
+      },
+      {
+        "input_code": "class Singleton:\n    _instance = None\n    \n    @classmethod\n    def get_instance(cls):\n        pass",
+        "expected_output": {
+          "Singleton": ["object"]
+        }
+      }
+    ],
+    "timeout": 60
+  },
+  {
+    "id": 4,
+    "context_length": "128K+",
+    "prompt": "You are an expert Python programmer. Write a function `detect_code_smells(code)` that analyzes Python source code and detects common code smells.\n\nRequirements:\n- Detect: long functions (>50 lines), duplicate code, complex conditionals (>3 nested if), magic numbers, unused imports\n- For long functions: return function name and line count\n- For duplicate code: return pairs of similar code blocks (simplified detection)\n- For complex conditionals: return line numbers with nesting depth > 3\n- For magic numbers: return numeric literals not in obvious contexts (not 0, 1, -1, 2, 10, 100)\n- For unused imports: return import statements that are never referenced\n- Return a dict with keys: 'long_functions', 'duplicates', 'complex_conditionals', 'magic_numbers', 'unused_imports'\n\nWrite your function below:",
+    "template_code": "def detect_code_smells(code):\n    \"\"\"Detect common code smells in Python source code.\n    \n    Args:\n        code: Python source code as string\n    \n    Returns:\n        Dict with detected code smells\n    \"\"\"\n    # Your implementation here\n    pass",
+    "test_cases": [
+      {
+        "input_code": "def very_long_function():\n    \"\"\"This is a very long function.\"\"\"\n    # 50+ lines of code\n    x = 1\n    x = 2\n    x = 3\n    x = 4\n    x = 5\n    x = 6\n    x = 7\n    x = 8\n    x = 9\n    x = 10\n    x = 11\n    x = 12\n    x = 13\n    x = 14\n    x = 15\n    x = 16\n    x = 17\n    x = 18\n    x = 19\n    x = 20\n    x = 21\n    x = 22\n    x = 23\n    x = 24\n    x = 25\n    x = 26\n    x = 27\n    x = 28\n    x = 29\n    x = 30\n    x = 31\n    x = 32\n    x = 33\n    x = 34\n    x = 35\n    x = 36\n    x = 37\n    x = 38\n    x = 39\n    x = 40\n    x = 41\n    x = 42\n    x = 43\n    x = 44\n    x = 45\n    x = 46\n    x = 47\n    x = 48\n    x = 49\n    x = 50\n    return x\n\ndef complex_nested():\n    if True:\n        if True:\n            if True:\n                if True:\n                    pass\n\nimport os\nimport sys\nx = 42",
+        "expected_output": {
+          "long_functions": ["very_long_function"],
+          "duplicates": [],
+          "complex_conditionals": ["complex_nested:4"],
+          "magic_numbers": [42],
+          "unused_imports": ["os", "sys"]
+        }
+      },
+      {
+        "input_code": "def clean_function():\n    x = 1\n    return x",
+        "expected_output": {
+          "long_functions": [],
+          "duplicates": [],
+          "complex_conditionals": [],
+          "magic_numbers": [],
+          "unused_imports": []
+        }
+      }
+    ],
+    "timeout": 90
+  }
+]

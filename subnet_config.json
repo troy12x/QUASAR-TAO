@@ -1,0 +1,21 @@
+{
+  "subnet_name": "HFA Infinite Context",
+  "description": "Breakthrough infinite context processing with Hierarchical Flow Anchoring",
+  "version": "1.0.0",
+  "evaluation_cycle_seconds": 90,
+  "max_miners_per_cycle": 16,
+  "context_length_tests": [
+    1000,
+    5000,
+    15000,
+    50000,
+    100000
+  ],
+  "scoring_weights": {
+    "memory_retention_score": 0.35,
+    "position_understanding_score": 0.25,
+    "coherence_score": 0.2,
+    "tokens_per_second": 0.1,
+    "scaling_efficiency": 0.1
+  }
+}

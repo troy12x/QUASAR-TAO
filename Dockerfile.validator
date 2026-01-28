@@ -1,0 +1,29 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy validator code
+COPY neurons/ ./neurons/
+COPY quasar/ ./quasar/
+
+# Create state directory
+RUN mkdir -p /app/state
+
+# Environment variables
+ENV NETUID=24
+ENV WALLET_NAME=validator
+ENV HOTKEY=default
+ENV CHALLENGE_URL=http://challenge:8080
+ENV NETWORK=finney
+
+# Run the validator
+CMD ["python", "neurons/validator.py", "--netuid", "24"]

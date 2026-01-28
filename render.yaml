@@ -1,0 +1,10 @@
+services:
+  # Validator API (already deployed at quasar-subnet.onrender.com)
+  - type: web
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:///./quasar.db
+    healthCheckPath: /health

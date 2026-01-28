@@ -1,0 +1,78 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME_CHALLENGE: ghcr.io/${{ github.repository_owner }}/quasar-challenge
+  IMAGE_NAME_VALIDATOR: ghcr.io/${{ github.repository_owner }}/quasar-validator
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.IMAGE_NAME_CHALLENGE }}
+            ${{ env.IMAGE_NAME_VALIDATOR }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Challenge Container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./challenge/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Validator Node
+        uses: docker/build-push-action@v5
+        with:
+          context: ./validator
+          file: ./validator/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/quasar-validator:latest
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: |
+          echo "Challenge Container pushed as: ghcr.io/${{ github.repository_owner }}/quasar-challenge:latest"
+          echo "Validator Node pushed as: ghcr.io/${{ github.repository_owner }}/quasar-validator:latest"

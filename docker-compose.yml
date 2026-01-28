@@ -1,0 +1,85 @@
+version: '3.8'
+
+
+
+
+services:
+  # Challenge Container
+  challenge:
+    image: silxai/quasar-challenge:v8
+    container_name: quasar-challenge
+    restart: unless-stopped
+    
+    # Enable Watchtower auto-update
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATASET_PATH=/data/docmath.jsonl
+      - CHALLENGE_HOST=0.0.0.0
+      - CHALLENGE_PORT=8080
+      - SAMPLES_PER_EVALUATION=10
+      - TIMEOUT_SECS=300
+    networks:
+      - quasar-net
+
+  # Validator Node
+  validator:
+    image: silxai/quasar-validator:v3
+    container_name: quasar-validator
+    restart: unless-stopped
+    
+    # Enable Watchtower auto-update
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    
+    environment:
+      - NETUID=24
+      - WALLET_NAME=validator
+      - HOTKEY=default
+      - CHALLENGE_URL=http://challenge:8080
+      - NETWORK=finney
+    networks:
+      - quasar-net
+    depends_on:
+      - challenge
+
+  # ==========================================================================
+  # Watchtower - Auto-update containers
+  # ==========================================================================
+  watchtower:
+    image: containrrr/watchtower
+    container_name: quasar-watchtower
+    restart: unless-stopped
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    
+    environment:
+      # Only update containers with label "com.centurylinklabs.watchtower.enable=true"
+      - WATCHTOWER_LABEL_ENABLE=true
+      # Check at :00, :05, :10, :15... (all validators sync at same time)
+      - WATCHTOWER_SCHEDULE=0 */5 * * * *
+      # Remove old images after update
+      - WATCHTOWER_CLEANUP=true
+      # Include stopped containers
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      # Logging
+      - WATCHTOWER_LOG_LEVEL=info
+    
+    networks:
+      - quasar-net
+
+# NOTE: Miners run locally, not in Docker
+# Each miner runs their own Python script:
+#   python miner/server.py --port 8000
+
+# testing work for godsake
+
+networks:
+  quasar-net:
+    driver: bridge
