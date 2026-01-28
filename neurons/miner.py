@@ -52,6 +52,10 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
         
+        # Set PyTorch CUDA memory allocation config to reduce fragmentation
+        if torch.cuda.is_available():
+            os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        
         # Agent state
         self.active_agents = {}
         self.optimization_iterations = 0
@@ -69,6 +73,10 @@ class Miner(BaseMinerNeuron):
         # Initialize device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         bt.logging.info(f"Using device: {self.device}")
+        
+        if torch.cuda.is_available():
+            total_mem, free_mem = torch.cuda.mem_get_info()
+            print(f"[MINER] GPU Memory: {free_mem/1024**3:.2f} GB free / {total_mem/1024**3:.2f} GB total", flush=True)
         
         # Get model name from config or use default
         self.model_name = getattr(self.config.miner, 'model_name', "Qwen/Qwen2.5-0.5B-Instruct")
@@ -126,10 +134,66 @@ class Miner(BaseMinerNeuron):
             self.model.eval()
             print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
+            
+            if torch.cuda.is_available():
+                total_mem, free_mem = torch.cuda.mem_get_info()
+                print(f"[MINER] GPU Memory after model load: {free_mem/1024**3:.2f} GB free / {total_mem/1024**3:.2f} GB total", flush=True)
+            
             self.model_loaded = True
         except Exception as e:
             bt.logging.error(f"Failed to load model {self.model_name}: {e}")
             raise e
+
+    def _move_model_to_cpu(self):
+        """Temporarily move model to CPU to free GPU memory for tests."""
+        if self.model is not None and torch.cuda.is_available():
+            try:
+                # Handle models loaded with device_map="auto"
+                if hasattr(self.model, 'hf_device_map'):
+                    # Model is distributed across devices, need to move each module
+                    for name, module in self.model.named_modules():
+                        if hasattr(module, 'to'):
+                            module.to('cpu')
+                else:
+                    # Standard model movement
+                    if hasattr(self.model, 'to'):
+                        self.model = self.model.to('cpu')
+                    elif hasattr(self.model, 'cpu'):
+                        self.model = self.model.cpu()
+                
+                # Force cleanup
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                
+                free_mem = torch.cuda.mem_get_info()[0] / 1024**3
+                print(f"[MINER] Model moved to CPU. GPU memory freed: {free_mem:.2f} GB available", flush=True)
+            except Exception as e:
+                print(f"[MINER] Warning: Could not move model to CPU: {e}", flush=True)
+
+    def _move_model_to_gpu(self):
+        """Move model back to GPU after tests."""
+        if self.model is not None and torch.cuda.is_available():
+            try:
+                # Handle models loaded with device_map="auto"
+                if hasattr(self.model, 'hf_device_map'):
+                    # Use device_map="auto" to restore original device mapping
+                    from transformers import AutoModelForCausalLM
+                    # Reload with device_map if needed, or just move to cuda
+                    if hasattr(self.model, 'to'):
+                        self.model = self.model.to('cuda')
+                else:
+                    # Standard model movement
+                    if hasattr(self.model, 'to'):
+                        self.model = self.model.to('cuda')
+                    elif hasattr(self.model, 'cuda'):
+                        self.model = self.model.cuda()
+                
+                print("[MINER] Model moved back to GPU", flush=True)
+            except Exception as e:
+                print(f"[MINER] Warning: Could not move model back to GPU: {e}", flush=True)
 
     def _sign_message(self, message: str) -> str:
         """Sign a message with the wallet's private key."""
@@ -393,6 +457,16 @@ class Miner(BaseMinerNeuron):
             previous_error = None
 
             for attempt in range(max_retries):
+                # Ensure model is on GPU for code generation (if it was moved to CPU)
+                if self.model is not None and torch.cuda.is_available():
+                    try:
+                        model_device = next(self.model.parameters()).device
+                        if model_device.type == 'cpu':
+                            print("[MINER] Model is on CPU, moving to GPU for code generation...", flush=True)
+                            self._move_model_to_gpu()
+                    except (StopIteration, AttributeError):
+                        pass
+                
                 # Clear memory
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -431,14 +505,14 @@ class Miner(BaseMinerNeuron):
                 
                 print(f"[MINER] Generating code...", flush=True)
                 
-                # Apply chat template - may return BatchEncoding or tensor
+                # Apply chat template - returns BatchEncoding (dict-like object)
                 tokenized = self.tokenizer.apply_chat_template(
                     messages, 
                     return_tensors="pt", 
                     add_generation_prompt=True
                 )
                 
-                # Extract input_ids if it's a BatchEncoding, otherwise use directly
+                # Extract input_ids from BatchEncoding
                 if hasattr(tokenized, 'input_ids'):
                     input_ids = tokenized['input_ids']
                 elif isinstance(tokenized, dict):
@@ -449,6 +523,7 @@ class Miner(BaseMinerNeuron):
                 # Ensure it's a tensor and move to device
                 if not isinstance(input_ids, torch.Tensor):
                     input_ids = torch.tensor(input_ids)
+                
                 input_ids = input_ids.to(self.device)
                 
                 streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, decode_kwargs={"skip_special_tokens": True})
@@ -568,6 +643,10 @@ class Miner(BaseMinerNeuron):
                         capture_output=True
                     )
                     
+                    # Move model to CPU to free GPU memory for tests
+                    print("[MINER] Moving model to CPU to free GPU memory for tests...", flush=True)
+                    self._move_model_to_cpu()
+                    
                     # Clear GPU memory before running tests
                     print("[MINER] Clearing GPU memory before tests...", flush=True)
                     if torch.cuda.is_available():
@@ -598,6 +677,10 @@ class Miner(BaseMinerNeuron):
                         env=env
                     )
                     
+                    # Move model back to GPU after tests
+                    print("[MINER] Moving model back to GPU...", flush=True)
+                    self._move_model_to_gpu()
+                    
                     if result.returncode != 0:
                         print(f"[MINER] Tests Failed:\n{result.stderr}", flush=True)
                         
@@ -606,13 +689,15 @@ class Miner(BaseMinerNeuron):
                         is_oom = "OutOfMemoryError" in error_output or "out of memory" in error_output.lower()
                         
                         if is_oom:
-                            # Clear GPU memory after OOM
+                            # Clear GPU memory after OOM (model should already be on CPU)
                             print("[MINER] OOM detected, clearing GPU memory...", flush=True)
                             if torch.cuda.is_available():
                                 torch.cuda.empty_cache()
                                 import gc
                                 gc.collect()
                                 torch.cuda.empty_cache()
+                                # Ensure model is on CPU
+                                self._move_model_to_cpu()
                             
                             previous_error = (
                                 f"CUDA Out of Memory Error detected.\n"

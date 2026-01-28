@@ -618,13 +618,65 @@ class Validator(BaseValidatorNeuron):
                 return
             
             # Evaluation complete - scores are already updated in API
-            # Other validators will fetch weights from /get_weights and submit to chain
             print(f"[VALIDATOR] ✅ Evaluation complete: {len(evaluated_scores)} submissions evaluated", flush=True)
-            print(f"[VALIDATOR] 📊 Scores updated in API - validators can fetch weights from /get_weights", flush=True)
             bt.logging.success(f"✅ Evaluation complete: {len(evaluated_scores)} submissions")
             
             for hotkey, score in evaluated_scores.items():
                 print(f"[VALIDATOR]   {hotkey[:12]}...: score={score:.4f}", flush=True)
+            
+            # Check if current round is ending soon and finalize if needed
+            try:
+                response = requests.get(f"{VALIDATOR_API_URL}/get_current_round", timeout=10)
+                if response.status_code == 200:
+                    round_data = response.json()
+                    time_remaining = round_data.get("time_remaining_seconds", 3600)
+                    
+                    # If round ends in < 5 minutes, finalize it
+                    if 0 < time_remaining < 300:
+                        print(f"[VALIDATOR] ⏰ Round ending in {time_remaining}s, finalizing...", flush=True)
+                        try:
+                            finalize_resp = requests.post(
+                                f"{VALIDATOR_API_URL}/finalize_round/{round_data['id']}",
+                                timeout=60
+                            )
+                            if finalize_resp.status_code == 200:
+                                finalize_result = finalize_resp.json()
+                                print(f"[VALIDATOR] ✅ Round {round_data['id']} finalized. Winner: {finalize_result.get('winner', 'N/A')}", flush=True)
+                                bt.logging.info(f"Round {round_data['id']} finalized")
+                            else:
+                                print(f"[VALIDATOR] ⚠️ Failed to finalize round (status {finalize_resp.status_code})", flush=True)
+                        except Exception as e:
+                            print(f"[VALIDATOR] ⚠️ Failed to finalize round: {e}", flush=True)
+            except Exception as e:
+                print(f"[VALIDATOR] ⚠️ Round check failed: {e}", flush=True)
+            
+            # Fetch and submit weights from API (for completed rounds)
+            try:
+                response = requests.get(f"{VALIDATOR_API_URL}/get_weights", timeout=10)
+                if response.status_code == 200:
+                    weights_data = response.json()
+                    weights = weights_data.get("weights", [])
+                    
+                    if weights:
+                        # Get miner UIDs from weights
+                        miner_uids = []
+                        for weight_entry in weights:
+                            uid = weight_entry.get("uid", 0)
+                            if uid > 0:
+                                miner_uids.append(uid)
+                        
+                        if miner_uids:
+                            print(f"[VALIDATOR] 📊 Fetching weights for {len(miner_uids)} miners", flush=True)
+                            bt.logging.info(f"Fetching weights for {len(miner_uids)} miners")
+                            # Submit weights to chain
+                            await self.submit_weights(miner_uids)
+                        else:
+                            print(f"[VALIDATOR] ⚠️ No valid UIDs in weights data", flush=True)
+                    else:
+                        print(f"[VALIDATOR] ⚠️ No weights available yet", flush=True)
+            except Exception as e:
+                print(f"[VALIDATOR] ⚠️ Weight fetching/submission failed: {e}", flush=True)
+                bt.logging.warning(f"Weight submission failed: {e}")
             
             # Wait before next cycle using dynamic interval
             print(f"[VALIDATOR] ⏱️ Waiting {polling_interval}s before next cycle...", flush=True)
