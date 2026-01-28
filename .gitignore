@@ -172,3 +172,6 @@ testing/
 
 # .md files
 *.md
+
+# .db files
+*.db

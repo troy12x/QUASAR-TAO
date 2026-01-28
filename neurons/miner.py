@@ -206,6 +206,9 @@ class Miner(BaseMinerNeuron):
                 print(f"[MINER] GPU Memory after model load: {free_mem/1024**3:.2f} GB free / {total_mem/1024**3:.2f} GB total", flush=True)
             
             self.model_loaded = True
+        except Exception as e:
+            bt.logging.error(f"Failed to load model {self.model_name}: {e}")
+            raise e
     
     def _verify_model_loaded(self):
         """Verify that the correct model is loaded (Phase 3: Model verification)."""
@@ -255,9 +258,6 @@ class Miner(BaseMinerNeuron):
         print(f"  - Estimated Size: ~{self._estimate_model_size(self.model_name)}B parameters", flush=True)
         print(f"  - Max New Tokens: {self.agent_max_new_tokens}", flush=True)
         print(f"  - Max Retries: {int(os.getenv('MINER_MAX_RETRIES', '20'))}", flush=True)
-        except Exception as e:
-            bt.logging.error(f"Failed to load model {self.model_name}: {e}")
-            raise e
 
     def _move_model_to_cpu(self):
         """Temporarily move model to CPU to free GPU memory for tests."""
@@ -417,6 +417,49 @@ class Miner(BaseMinerNeuron):
                 issues.append(f"Forbidden import detected: {forbidden}")
         
         return len(issues) == 0, "\n".join(issues) if issues else "OK"
+
+    def clean_code_content(self, code: str) -> str:
+        """Clean extracted code content to fix indentation issues."""
+        if not code:
+            return code
+        
+        lines = code.split('\n')
+        if not lines:
+            return code
+        
+        # Find first non-empty line
+        first_non_empty_idx = None
+        for i, line in enumerate(lines):
+            if line.strip():  # Non-empty line
+                first_non_empty_idx = i
+                break
+        
+        if first_non_empty_idx is None:
+            return code  # All lines are empty
+        
+        # Check if first non-empty line has leading whitespace
+        first_line = lines[first_non_empty_idx]
+        if not first_line.startswith((' ', '\t')):
+            return code  # No leading whitespace, return as-is
+        
+        # Calculate leading whitespace on first non-empty line
+        leading_whitespace = len(first_line) - len(first_line.lstrip())
+        
+        # Remove that amount of leading whitespace from all lines
+        cleaned_lines = []
+        for line in lines:
+            if line.strip():  # Non-empty line
+                if line.startswith(' ' * leading_whitespace):
+                    cleaned_lines.append(line[leading_whitespace:])
+                elif line.startswith('\t' * (leading_whitespace // 4)):
+                    # Handle tabs (assuming 4 spaces = 1 tab)
+                    cleaned_lines.append(line[(leading_whitespace // 4):])
+                else:
+                    cleaned_lines.append(line)
+            else:
+                cleaned_lines.append(line)  # Keep empty lines as-is
+        
+        return '\n'.join(cleaned_lines)
 
     def _move_model_to_gpu(self):
         """Move model back to GPU after tests."""
@@ -871,7 +914,7 @@ class Miner(BaseMinerNeuron):
                             old_code = f.read()
                     
                     # Clean the extracted content to fix indentation issues
-                    new_content = clean_code_content(new_content)
+                    new_content = self.clean_code_content(new_content)
                     
                     # Validate code before writing (Phase 3: Code validation)
                     is_valid, validation_issues = self.validate_extracted_code(new_content, fname)
