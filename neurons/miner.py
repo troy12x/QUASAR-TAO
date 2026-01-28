@@ -431,7 +431,25 @@ class Miner(BaseMinerNeuron):
                 
                 print(f"[MINER] Generating code...", flush=True)
                 
-                input_ids = self.tokenizer.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True).to(self.device)
+                # Apply chat template - may return BatchEncoding or tensor
+                tokenized = self.tokenizer.apply_chat_template(
+                    messages, 
+                    return_tensors="pt", 
+                    add_generation_prompt=True
+                )
+                
+                # Extract input_ids if it's a BatchEncoding, otherwise use directly
+                if hasattr(tokenized, 'input_ids'):
+                    input_ids = tokenized['input_ids']
+                elif isinstance(tokenized, dict):
+                    input_ids = tokenized.get('input_ids', tokenized)
+                else:
+                    input_ids = tokenized
+                
+                # Ensure it's a tensor and move to device
+                if not isinstance(input_ids, torch.Tensor):
+                    input_ids = torch.tensor(input_ids)
+                input_ids = input_ids.to(self.device)
                 
                 streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, decode_kwargs={"skip_special_tokens": True})
                 generation_kwargs = dict(
