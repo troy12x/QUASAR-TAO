@@ -78,13 +78,31 @@ class Miner(BaseMinerNeuron):
             total_mem, free_mem = torch.cuda.mem_get_info()
             print(f"[MINER] GPU Memory: {free_mem/1024**3:.2f} GB free / {total_mem/1024**3:.2f} GB total", flush=True)
         
-        # Get model name from config or use default
-        self.model_name = getattr(self.config.miner, 'model_name', "Qwen/Qwen2.5-0.5B-Instruct")
+        # Get model name from config, env var, or use default (larger model for better code generation)
+        self.model_name = os.getenv("MINER_MODEL_NAME", 
+            getattr(self.config.miner, 'model_name', "Qwen/Qwen3-4B-Instruct-2507"))
+        
+        # Estimate model size and adjust parameters (Phase 2: Model-specific config)
+        model_size = self._estimate_model_size(self.model_name)
+        if model_size < 1.0:  # < 1B
+            print(f"[MINER] ⚠️  WARNING: Model {self.model_name} is small (<1B). Consider using larger model (>1B) for better error fixing.")
+            print(f"[MINER] ⚠️  Recommended: Qwen/Qwen3-4B-Instruct-2507 or set MINER_MODEL_NAME env var", flush=True)
+            self.agent_max_new_tokens = 2048  # Reduce for small models
+        elif model_size >= 4.0:  # >= 4B
+            self.agent_max_new_tokens = 8192  # Increase for large models
+            print(f"[MINER] Using large model ({self.model_name}, ~{model_size}B params). Increased max_new_tokens to {self.agent_max_new_tokens}", flush=True)
+        else:  # 1B - 4B
+            self.agent_max_new_tokens = 4096  # Default
+            print(f"[MINER] Using medium model ({self.model_name}, ~{model_size}B params)", flush=True)
         
         # Agent generation parameters
         self.agent_max_length = 8192
-        self.agent_max_new_tokens = 4096
-
+        
+        # Error tracking and success patterns (Phase 2 & 3)
+        self.successful_fixes = {}  # Track successful error fixes by type
+        self.failed_patterns = []   # Track patterns that consistently fail
+        self.error_statistics = {}  # Track error frequency
+        
         # Model will be loaded in load_model() method
         self.model = None
         self.tokenizer = None
@@ -104,6 +122,35 @@ class Miner(BaseMinerNeuron):
         self.target_sequence_length = int(os.getenv("TARGET_SEQUENCE_LENGTH", "100000"))
         self.optimization_interval = float(os.getenv("OPTIMIZATION_INTERVAL", "300"))  # 5 minutes
 
+    def _estimate_model_size(self, model_name: str) -> float:
+        """Estimate model size in billions of parameters (Phase 2)."""
+        # Extract from name or use defaults
+        name_lower = model_name.lower()
+        if "0.5" in name_lower or "500m" in name_lower:
+            return 0.5
+        elif "1.5" in name_lower or "1.5b" in name_lower:
+            return 1.5
+        elif "2" in name_lower and ("2b" in name_lower or "2.5" in name_lower):
+            return 2.5
+        elif "3" in name_lower and ("3b" in name_lower or "3.5" in name_lower):
+            return 3.5
+        elif "4" in name_lower and ("4b" in name_lower or "4.5" in name_lower):
+            return 4.0
+        elif "8" in name_lower and ("8b" in name_lower or "8.5" in name_lower):
+            return 8.0
+        elif "1b" in name_lower or "1.0" in name_lower:
+            return 1.0
+        elif "7b" in name_lower:
+            return 7.0
+        elif "13b" in name_lower:
+            return 13.0
+        # Default assumption based on model name
+        if "qwen3" in name_lower and "4b" in name_lower:
+            return 4.0
+        elif "qwen2.5" in name_lower and "0.5b" in name_lower:
+            return 0.5
+        return 1.0  # Default assumption
+
     def load_model(self):
         """Load the model and tokenizer."""
         if self.model_loaded:
@@ -115,13 +162,29 @@ class Miner(BaseMinerNeuron):
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
             
             print(f" Loading model weights for {self.model_name}... (this can take several minutes)")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name, 
-                trust_remote_code=True, 
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                low_cpu_mem_usage=True,
-                device_map="auto" if torch.cuda.is_available() else None
-            )
+            # Don't use device_map="auto" if we need to move model to CPU for tests
+            # Use explicit device placement instead
+            use_device_map = os.getenv("MINER_USE_DEVICE_MAP", "false").lower() == "true"
+            if use_device_map and torch.cuda.is_available():
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name, 
+                    trust_remote_code=True, 
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                    device_map="auto"
+                )
+            else:
+                # Load to CPU first, then move to GPU (easier to move back to CPU later)
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name, 
+                    trust_remote_code=True, 
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    low_cpu_mem_usage=True,
+                    device_map=None  # Load to CPU first
+                )
+                if torch.cuda.is_available():
+                    print(f"[MINER] Moving model to GPU...", flush=True)
+                    self.model = self.model.to('cuda')
             
             self.max_length = getattr(self.config.miner, 'max_length', 32768)
             bt.logging.info(f"Miner max length set to: {self.max_length}")
@@ -135,11 +198,63 @@ class Miner(BaseMinerNeuron):
             print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
             
+            # Verify model is correct (Phase 3: Model verification)
+            self._verify_model_loaded()
+            
             if torch.cuda.is_available():
                 total_mem, free_mem = torch.cuda.mem_get_info()
                 print(f"[MINER] GPU Memory after model load: {free_mem/1024**3:.2f} GB free / {total_mem/1024**3:.2f} GB total", flush=True)
             
             self.model_loaded = True
+    
+    def _verify_model_loaded(self):
+        """Verify that the correct model is loaded (Phase 3: Model verification)."""
+        print(f"[MINER] Verifying model configuration...", flush=True)
+        
+        # Check model name matches
+        if hasattr(self.model, 'config') and hasattr(self.model.config, 'name_or_path'):
+            loaded_name = self.model.config.name_or_path
+            if loaded_name != self.model_name:
+                print(f"[MINER] ⚠️  WARNING: Model name mismatch!", flush=True)
+                print(f"[MINER]   Expected: {self.model_name}", flush=True)
+                print(f"[MINER]   Loaded: {loaded_name}", flush=True)
+            else:
+                print(f"[MINER] ✅ Model name verified: {loaded_name}", flush=True)
+        
+        # Check model device
+        if torch.cuda.is_available():
+            try:
+                model_device = next(self.model.parameters()).device
+                print(f"[MINER] ✅ Model device: {model_device}", flush=True)
+            except StopIteration:
+                print(f"[MINER] ⚠️  Could not determine model device", flush=True)
+        
+        # Check model size (parameter count)
+        try:
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            params_b = total_params / 1e9
+            print(f"[MINER] ✅ Model parameters: {params_b:.2f}B total, {trainable_params/1e9:.2f}B trainable", flush=True)
+            
+            # Verify model size matches expected
+            expected_size = self._estimate_model_size(self.model_name)
+            if abs(params_b - expected_size) > 0.5:  # Allow 0.5B difference
+                print(f"[MINER] ⚠️  WARNING: Model size mismatch!", flush=True)
+                print(f"[MINER]   Expected: ~{expected_size}B", flush=True)
+                print(f"[MINER]   Actual: ~{params_b:.2f}B", flush=True)
+        except Exception as e:
+            print(f"[MINER] ⚠️  Could not count model parameters: {e}", flush=True)
+        
+        # Check tokenizer matches model
+        if hasattr(self.tokenizer, 'model_max_length'):
+            print(f"[MINER] ✅ Tokenizer max length: {self.tokenizer.model_max_length}", flush=True)
+        
+        # Print model configuration summary
+        print(f"[MINER] Model Configuration Summary:", flush=True)
+        print(f"  - Model Name: {self.model_name}", flush=True)
+        print(f"  - Estimated Size: ~{self._estimate_model_size(self.model_name)}B parameters", flush=True)
+        print(f"  - Max New Tokens: {self.agent_max_new_tokens}", flush=True)
+        print(f"  - Max Retries: {int(os.getenv('MINER_MAX_RETRIES', '20'))}", flush=True)
         except Exception as e:
             bt.logging.error(f"Failed to load model {self.model_name}: {e}")
             raise e
@@ -152,50 +267,53 @@ class Miner(BaseMinerNeuron):
                 initial_mem = torch.cuda.mem_get_info()[0] / 1024**3
                 print(f"[MINER] GPU memory before moving model to CPU: {initial_mem:.2f} GB", flush=True)
                 
-                # Handle models loaded with device_map="auto"
+                # Handle models loaded with device_map="auto" - need special handling
                 if hasattr(self.model, 'hf_device_map'):
-                    print(f"[MINER] Model uses device_map, moving all modules to CPU...", flush=True)
-                    # Model is distributed across devices, need to move each module
+                    print(f"[MINER] Model uses device_map, using aggressive CPU offloading...", flush=True)
+                    # For device_map models, we need to move all parameters
                     moved_count = 0
-                    for name, module in self.model.named_modules():
-                        if hasattr(module, 'to'):
-                            try:
-                                # Check if module is on GPU
-                                try:
-                                    device = next(module.parameters()).device
-                                    if device.type == 'cuda':
-                                        module.to('cpu')
-                                        moved_count += 1
-                                except StopIteration:
-                                    # Module has no parameters, try to move anyway
-                                    if hasattr(module, 'device') and module.device.type == 'cuda':
-                                        module.to('cpu')
-                                        moved_count += 1
-                            except Exception as e:
-                                print(f"[MINER] Warning: Could not move module {name} to CPU: {e}", flush=True)
-                    print(f"[MINER] Moved {moved_count} modules to CPU", flush=True)
+                    for name, param in self.model.named_parameters():
+                        if param.is_cuda:
+                            param.data = param.data.cpu()
+                            moved_count += 1
+                    for name, buffer in self.model.named_buffers():
+                        if buffer.is_cuda:
+                            buffer.data = buffer.data.cpu()
+                            moved_count += 1
+                    print(f"[MINER] Moved {moved_count} parameters/buffers to CPU", flush=True)
                 else:
-                    # Standard model movement
+                    # Standard model movement - this should work better now
                     print(f"[MINER] Moving standard model to CPU...", flush=True)
-                    if hasattr(self.model, 'to'):
-                        self.model = self.model.to('cpu')
-                    elif hasattr(self.model, 'cpu'):
-                        self.model = self.model.cpu()
+                    # Delete any cached activations first
+                    if hasattr(self.model, 'cache'):
+                        del self.model.cache
+                    
+                    # Move model to CPU
+                    self.model = self.model.to('cpu')
+                    
+                    # Explicitly move all parameters (in case some didn't move)
+                    for param in self.model.parameters():
+                        if param.is_cuda:
+                            param.data = param.data.cpu()
                 
-                # Force aggressive cleanup
+                # Force aggressive cleanup - multiple passes
+                for _ in range(3):
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    import gc
+                    gc.collect()
+                
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-                import gc
-                gc.collect()
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                gc.collect()
-                torch.cuda.empty_cache()
                 
                 # Verify memory freed
                 final_mem = torch.cuda.mem_get_info()[0] / 1024**3
                 freed_mem = final_mem - initial_mem
                 print(f"[MINER] Model moved to CPU. GPU memory: {initial_mem:.2f} GB -> {final_mem:.2f} GB (freed {freed_mem:.2f} GB)", flush=True)
+                
+                if freed_mem < 5.0:
+                    print(f"[MINER] ⚠️  WARNING: Only freed {freed_mem:.2f} GB. Model may not have moved completely.", flush=True)
+                    print(f"[MINER] ⚠️  This may cause OOM during tests. Consider using MINER_USE_DEVICE_MAP=false", flush=True)
                 
                 # Verify model is actually on CPU
                 try:
@@ -211,6 +329,94 @@ class Miner(BaseMinerNeuron):
                 print(f"[MINER] ⚠️  Error moving model to CPU: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
+
+    def categorize_error(self, error_output: str) -> dict:
+        """Categorize error and provide specific fix strategy (Phase 2: Error pattern recognition)."""
+        error_type = "unknown"
+        fix_strategy = ""
+        severity = "medium"
+        
+        if "IndentationError" in error_output or "unexpected indent" in error_output:
+            error_type = "indentation"
+            fix_strategy = "Fix Python indentation - ensure top-level code at column 0, use 4 spaces per level"
+            severity = "high"
+        elif "size of tensor" in error_output or "must match" in error_output or "non-singleton dimension" in error_output:
+            error_type = "tensor_shape"
+            # Extract tensor sizes
+            import re
+            match = re.search(r"tensor a \((\d+)\) must match.*tensor b \((\d+)\)", error_output)
+            if match:
+                fix_strategy = f"Tensor shape mismatch: sizes {match.group(1)} vs {match.group(2)}. Check broadcasting dimensions and .view()/.expand() operations."
+            else:
+                fix_strategy = "Tensor shape mismatch - check all tensor operations for correct dimensions"
+            severity = "high"
+        elif "OutOfMemoryError" in error_output or "out of memory" in error_output.lower():
+            error_type = "oom"
+            fix_strategy = "Reduce memory usage - use smaller tensors, process in chunks, free intermediate tensors"
+            severity = "critical"
+        elif "AttributeError" in error_output:
+            error_type = "attribute"
+            fix_strategy = "Check object type and available methods - verify you're calling methods on correct object"
+            severity = "medium"
+        elif "NameError" in error_output:
+            error_type = "name"
+            fix_strategy = "Variable or function name not defined - check imports and variable names"
+            severity = "medium"
+        elif "TypeError" in error_output:
+            error_type = "type"
+            fix_strategy = "Type mismatch - check argument types and function signatures"
+            severity = "medium"
+        elif "SyntaxError" in error_output:
+            error_type = "syntax"
+            fix_strategy = "Python syntax error - check brackets, quotes, colons, indentation"
+            severity = "high"
+        elif "ImportError" in error_output or "ModuleNotFoundError" in error_output:
+            error_type = "import"
+            fix_strategy = "Import error - don't add new imports, use existing ones from fla.utils"
+            severity = "high"
+        
+        return {
+            'type': error_type,
+            'strategy': fix_strategy,
+            'severity': severity,
+            'raw_error': error_output[:500]
+        }
+
+    def validate_extracted_code(self, code: str, filename: str) -> tuple[bool, str]:
+        """Validate extracted code before writing (Phase 3: Code validation)."""
+        issues = []
+        
+        if not code or not code.strip():
+            return False, "Code is empty"
+        
+        # Check for basic syntax
+        try:
+            compile(code, filename, 'exec')
+        except SyntaxError as e:
+            issues.append(f"Syntax error at line {e.lineno}: {e.msg}")
+            return False, "\n".join(issues)
+        except Exception as e:
+            issues.append(f"Compilation error: {e}")
+            return False, "\n".join(issues)
+        
+        # Check for common issues
+        if code.strip().startswith(' ') or code.strip().startswith('\t'):
+            issues.append("Code starts with whitespace - will cause IndentationError")
+        
+        # Check for known problematic patterns
+        if 'beta.view(-1, 1)' in code and 'beta.view(-1, 1, 1, 1, 1)' not in code:
+            issues.append("Potential tensor shape error: beta.view(-1, 1) detected (should be beta.view(-1, 1, 1, 1, 1))")
+        
+        if 'alpha_expanded' in code and '.expand(' not in code and '.unsqueeze(' not in code:
+            issues.append("alpha_expanded may not be expanded correctly - check expansion dimensions")
+        
+        # Check for forbidden imports
+        forbidden_imports = ['fused_quasar_gate', 'ISAMD']  # Should be IS_AMD
+        for forbidden in forbidden_imports:
+            if f'import {forbidden}' in code or f'from.*{forbidden}' in code:
+                issues.append(f"Forbidden import detected: {forbidden}")
+        
+        return len(issues) == 0, "\n".join(issues) if issues else "OK"
 
     def _move_model_to_gpu(self):
         """Move model back to GPU after tests."""
@@ -452,6 +658,26 @@ class Miner(BaseMinerNeuron):
             # Construct prompt
             system_prompt = (
                 "You are an expert AI kernel engineer optimizing Quasar Attention.\n"
+                "You are part of an ITERATIVE ERROR-FIXING SYSTEM.\n"
+                "When you see errors, you MUST:\n"
+                "1. Read the error message CAREFULLY\n"
+                "2. Identify the EXACT line and operation causing the error\n"
+                "3. Understand WHY the error occurred (tensor shape mismatch, syntax error, etc.)\n"
+                "4. Make a MINIMAL fix that addresses ONLY that specific error\n"
+                "5. Keep ALL other code unchanged\n"
+                "6. Verify your fix by checking tensor shapes match before operations\n\n"
+                "COMMON ERROR PATTERNS YOU MUST FIX:\n"
+                "1. Tensor shape mismatch: Check all .view(), .expand(), .unsqueeze() operations\n"
+                "2. IndentationError: Ensure code starts at column 0, use 4 spaces for indentation\n"
+                "3. AttributeError: Check that you're calling methods on the correct object type\n"
+                "4. Import errors: Don't add new imports, use existing ones\n\n"
+                "ERROR-FIXING WORKFLOW:\n"
+                "1. Read the error message\n"
+                "2. Find the file and line number mentioned\n"
+                "3. Look at that specific line in the code\n"
+                "4. Understand what's wrong (shape mismatch, syntax, etc.)\n"
+                "5. Make the MINIMAL change needed to fix it\n"
+                "6. Output the COMPLETE file with your fix\n\n"
                 "CRITICAL OUTPUT FORMAT:\n"
                 "You MUST wrap your code in markdown code blocks like this example:\n\n"
                 "```python:chunk.py\n"
@@ -491,9 +717,11 @@ class Miner(BaseMinerNeuron):
 
             # Generate code with streaming
             # We wrap this in a retry loop to handle test failures
-            max_retries = 10  # Increased from 3 to give model more chances to fix errors
+            # Increased retries for larger models that can handle more iterations
+            max_retries = int(os.getenv("MINER_MAX_RETRIES", "20"))  # Increased for better error fixing
             success = False
             previous_error = None
+            error_history = []  # Track error history for cumulative learning
 
             for attempt in range(max_retries):
                 # Ensure model is on GPU for code generation (if it was moved to CPU)
@@ -514,6 +742,11 @@ class Miner(BaseMinerNeuron):
 
                 if attempt > 0:
                     print(f"\n[MINER] --- Attempt {attempt + 1}/{max_retries} (Retry with feedback) ---", flush=True)
+                    # Exponential backoff for thinking time (but cap at 10s)
+                    wait_time = min(2 ** (attempt - 1), 10)
+                    if wait_time > 0:
+                        print(f"[MINER] Waiting {wait_time}s for model to process error feedback...", flush=True)
+                        time.sleep(wait_time)
 
                 # Construct messages afresh to save context window
                 # We start with the base prompts
@@ -523,18 +756,38 @@ class Miner(BaseMinerNeuron):
                 # If we have a previous error, append it to the user prompt to give feedback
                 # WITHOUT keeping the entire previous failed conversation history
                 if previous_error:
+                    # Add error to history
+                    error_history.append({
+                        'attempt': attempt,
+                        'error': previous_error,
+                        'timestamp': time.time()
+                    })
+                    
+                    # Build cumulative error context (last 3 errors to avoid too much context)
+                    recent_errors = error_history[-3:] if len(error_history) > 3 else error_history
+                    error_context = "\n\n".join([
+                        f"--- Attempt {e['attempt'] + 1} Error ---\n{e['error'][:500]}" 
+                        for e in recent_errors
+                    ])
+                    
                     current_user_prompt = (
-                        f"The code you generated has an error. Here is the CURRENT broken file:\n\n"
+                        f"ITERATIVE ERROR FIXING - Attempt {attempt + 1}/{max_retries}\n\n"
+                        f"PREVIOUS ERRORS (learn from these - don't repeat the same mistakes):\n"
+                        f"{error_context}\n\n"
+                        f"CURRENT BROKEN CODE:\n\n"
                         f"=== chunk.py (CURRENT - HAS ERRORS) ===\n"
                         f"{file_contents.get('chunk.py', '')}\n\n"
-                        f"ERROR FROM RUNNING TESTS:\n{previous_error}\n\n"
+                        f"LATEST ERROR (this is what you need to fix NOW):\n{previous_error}\n\n"
                         f"CRITICAL INSTRUCTIONS:\n"
-                        f"1. Look at the error trace carefully\n"
-                        f"2. Find the EXACT line causing the error\n"
-                        f"3. Fix ONLY that specific issue\n"
-                        f"4. Output the COMPLETE corrected file (don't skip any parts)\n"
-                        f"5. Keep ALL imports and ALL functions intact\n"
-                        f"6. Make MINIMAL changes - only fix the error\n"
+                        f"1. Analyze ALL previous errors above - don't repeat the same mistakes\n"
+                        f"2. Look at the LATEST error trace carefully\n"
+                        f"3. Find the EXACT line causing the error\n"
+                        f"4. Understand WHY it's failing (tensor shape? syntax? attribute?)\n"
+                        f"5. Fix ONLY that specific issue with MINIMAL changes\n"
+                        f"6. Output the COMPLETE corrected file (don't skip any parts)\n"
+                        f"7. Keep ALL imports and ALL functions intact\n"
+                        f"8. Verify tensor shapes match before operations\n"
+                        f"9. If you see the same error pattern from previous attempts, try a DIFFERENT approach\n"
                     )
 
                 messages = [
@@ -616,6 +869,18 @@ class Miner(BaseMinerNeuron):
                     if os.path.exists(f_path):
                         with open(f_path, 'r') as f:
                             old_code = f.read()
+                    
+                    # Clean the extracted content to fix indentation issues
+                    new_content = clean_code_content(new_content)
+                    
+                    # Validate code before writing (Phase 3: Code validation)
+                    is_valid, validation_issues = self.validate_extracted_code(new_content, fname)
+                    if not is_valid:
+                        print(f"[MINER] ⚠️  Code validation warnings for {fname}:", flush=True)
+                        for issue in validation_issues.split('\n'):
+                            if issue:
+                                print(f"[MINER]   - {issue}", flush=True)
+                        # Still write it, but log the issues - model can fix them
                     
                     print(f"\n[MINER] Diff for {fname}:", flush=True)
                     diff_generator = difflib.unified_diff(
@@ -747,6 +1012,13 @@ class Miner(BaseMinerNeuron):
                         is_oom = "OutOfMemoryError" in error_output or "out of memory" in error_output.lower()
                         
                         if is_oom:
+                            # Phase 2: Use error categorization
+                            error_info = self.categorize_error(error_output)
+                            print(f"[MINER] Error categorized: {error_info['type']} (severity: {error_info['severity']})", flush=True)
+                            
+                            # Track error statistics
+                            self.error_statistics[error_info['type']] = self.error_statistics.get(error_info['type'], 0) + 1
+                            
                             # Clear GPU memory after OOM (model should already be on CPU)
                             print("[MINER] OOM detected, clearing GPU memory...", flush=True)
                             if torch.cuda.is_available():
@@ -788,6 +1060,13 @@ class Miner(BaseMinerNeuron):
                             bt.logging.info(f"Iteration {iteration} score: {score}")
                             print(f"[MINER] Benchmark Score: {score} tokens/sec")
                             
+                            # Track successful fix (Phase 3: Success tracking)
+                            if previous_error:
+                                error_info = self.categorize_error(previous_error)
+                                error_type = error_info.get('type', 'unknown')
+                                self.successful_fixes[error_type] = self.successful_fixes.get(error_type, 0) + 1
+                                print(f"[MINER] ✅ Successfully fixed {error_type} error (total fixes for this type: {self.successful_fixes[error_type]})", flush=True)
+                            
                             # Submit
                             commit_hash = self.get_commit_hash(repo_path)
                             self.submit_to_validator(fork_url, commit_hash, score)
@@ -802,6 +1081,17 @@ class Miner(BaseMinerNeuron):
 
             if not success:
                 print(f"[MINER] Optimization failed after {max_retries} attempts. Continuing to next iteration...", flush=True)
+                
+                # Log error statistics (Phase 3: Success tracking)
+                if self.error_statistics:
+                    print(f"[MINER] Error statistics for this iteration:", flush=True)
+                    for error_type, count in sorted(self.error_statistics.items(), key=lambda x: x[1], reverse=True):
+                        print(f"[MINER]   {error_type}: {count} occurrences", flush=True)
+                
+                if self.successful_fixes:
+                    print(f"[MINER] Successful fixes so far:", flush=True)
+                    for error_type, count in sorted(self.successful_fixes.items(), key=lambda x: x[1], reverse=True):
+                        print(f"[MINER]   {error_type}: {count} fixes", flush=True)
 
             # Install and Test
             try:

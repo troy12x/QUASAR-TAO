@@ -165,10 +165,10 @@ testing/
 .vscode/settings.json
 
 # .sh files
-# *.sh
+*.sh
 
 # .env files
 .env
 
 # .md files
-# *.md
+*.md
