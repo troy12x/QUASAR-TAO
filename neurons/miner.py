@@ -148,30 +148,69 @@ class Miner(BaseMinerNeuron):
         """Temporarily move model to CPU to free GPU memory for tests."""
         if self.model is not None and torch.cuda.is_available():
             try:
+                # Get initial memory
+                initial_mem = torch.cuda.mem_get_info()[0] / 1024**3
+                print(f"[MINER] GPU memory before moving model to CPU: {initial_mem:.2f} GB", flush=True)
+                
                 # Handle models loaded with device_map="auto"
                 if hasattr(self.model, 'hf_device_map'):
+                    print(f"[MINER] Model uses device_map, moving all modules to CPU...", flush=True)
                     # Model is distributed across devices, need to move each module
+                    moved_count = 0
                     for name, module in self.model.named_modules():
                         if hasattr(module, 'to'):
-                            module.to('cpu')
+                            try:
+                                # Check if module is on GPU
+                                try:
+                                    device = next(module.parameters()).device
+                                    if device.type == 'cuda':
+                                        module.to('cpu')
+                                        moved_count += 1
+                                except StopIteration:
+                                    # Module has no parameters, try to move anyway
+                                    if hasattr(module, 'device') and module.device.type == 'cuda':
+                                        module.to('cpu')
+                                        moved_count += 1
+                            except Exception as e:
+                                print(f"[MINER] Warning: Could not move module {name} to CPU: {e}", flush=True)
+                    print(f"[MINER] Moved {moved_count} modules to CPU", flush=True)
                 else:
                     # Standard model movement
+                    print(f"[MINER] Moving standard model to CPU...", flush=True)
                     if hasattr(self.model, 'to'):
                         self.model = self.model.to('cpu')
                     elif hasattr(self.model, 'cpu'):
                         self.model = self.model.cpu()
                 
-                # Force cleanup
+                # Force aggressive cleanup
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
                 import gc
                 gc.collect()
                 torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
+                torch.cuda.empty_cache()
                 
-                free_mem = torch.cuda.mem_get_info()[0] / 1024**3
-                print(f"[MINER] Model moved to CPU. GPU memory freed: {free_mem:.2f} GB available", flush=True)
+                # Verify memory freed
+                final_mem = torch.cuda.mem_get_info()[0] / 1024**3
+                freed_mem = final_mem - initial_mem
+                print(f"[MINER] Model moved to CPU. GPU memory: {initial_mem:.2f} GB -> {final_mem:.2f} GB (freed {freed_mem:.2f} GB)", flush=True)
+                
+                # Verify model is actually on CPU
+                try:
+                    model_device = next(self.model.parameters()).device
+                    if model_device.type == 'cpu':
+                        print(f"[MINER] ✅ Verified: Model is on CPU", flush=True)
+                    else:
+                        print(f"[MINER] ⚠️  Warning: Model device is {model_device}, expected CPU", flush=True)
+                except StopIteration:
+                    print(f"[MINER] ⚠️  Warning: Could not verify model device", flush=True)
+                    
             except Exception as e:
-                print(f"[MINER] Warning: Could not move model to CPU: {e}", flush=True)
+                print(f"[MINER] ⚠️  Error moving model to CPU: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
 
     def _move_model_to_gpu(self):
         """Move model back to GPU after tests."""
@@ -647,16 +686,35 @@ class Miner(BaseMinerNeuron):
                     print("[MINER] Moving model to CPU to free GPU memory for tests...", flush=True)
                     self._move_model_to_cpu()
                     
-                    # Clear GPU memory before running tests
-                    print("[MINER] Clearing GPU memory before tests...", flush=True)
+                    # Verify model is on CPU and get final memory state
                     if torch.cuda.is_available():
+                        # Additional aggressive cleanup
                         torch.cuda.empty_cache()
                         torch.cuda.synchronize()
                         import gc
                         gc.collect()
                         torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        
                         free_mem = torch.cuda.mem_get_info()[0] / 1024**3
-                        print(f"[MINER] GPU memory before tests: {free_mem:.2f} GB free", flush=True)
+                        total_mem = torch.cuda.mem_get_info()[1] / 1024**3
+                        print(f"[MINER] GPU memory before tests: {free_mem:.2f} GB free / {total_mem:.2f} GB total", flush=True)
+                        
+                        # Warn if memory is still low
+                        if free_mem < 5.0:
+                            print(f"[MINER] ⚠️  WARNING: Low GPU memory ({free_mem:.2f} GB). Tests may fail with OOM.", flush=True)
+                            print(f"[MINER] ⚠️  The test script will automatically reduce parameters, but this may still fail.", flush=True)
+                        
+                        # Verify model is actually on CPU
+                        try:
+                            if self.model is not None:
+                                model_device = next(self.model.parameters()).device
+                                if model_device.type != 'cpu':
+                                    print(f"[MINER] ⚠️  WARNING: Model is still on {model_device}, not CPU! This may cause OOM.", flush=True)
+                        except (StopIteration, AttributeError):
+                            pass
                     
                     print("[MINER] Running tests...", flush=True)
                     # Location of the test script we created

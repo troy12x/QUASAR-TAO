@@ -228,9 +228,17 @@ def test_quasar_stacked_benchmark():
         free_mem = torch.cuda.mem_get_info()[0] / 1024**3
         print(f"GPU memory before stacked test: {free_mem:.2f} GB free")
         
-        # Adjust parameters based on available memory
-        if free_mem < 10.0:
-            # Very limited memory - use smaller config
+        # Adjust parameters based on available memory - be more conservative
+        if free_mem < 5.0:
+            # Very limited memory - use minimal config
+            batch_size = 1
+            hidden_size = 512
+            num_heads = 4
+            n_layers = 8
+            seq_lens = [20000]
+            print(f"Very low memory ({free_mem:.2f} GB), using minimal config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
+        elif free_mem < 10.0:
+            # Limited memory - use smaller config
             batch_size = 1
             hidden_size = 1024
             num_heads = 8
