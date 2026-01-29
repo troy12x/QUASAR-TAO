@@ -261,74 +261,73 @@ class Miner(BaseMinerNeuron):
 
     def _move_model_to_cpu(self):
         """Temporarily move model to CPU to free GPU memory for tests."""
-        if self.model is not None and torch.cuda.is_available():
-            try:
-                # Get initial memory
-                initial_mem = torch.cuda.mem_get_info()[0] / 1024**3
-                print(f"[MINER] GPU memory before moving model to CPU: {initial_mem:.2f} GB", flush=True)
-                
-                # Handle models loaded with device_map="auto" - need special handling
-                if hasattr(self.model, 'hf_device_map'):
-                    print(f"[MINER] Model uses device_map, using aggressive CPU offloading...", flush=True)
-                    # For device_map models, we need to move all parameters
-                    moved_count = 0
-                    for name, param in self.model.named_parameters():
-                        if param.is_cuda:
-                            param.data = param.data.cpu()
-                            moved_count += 1
-                    for name, buffer in self.model.named_buffers():
-                        if buffer.is_cuda:
-                            buffer.data = buffer.data.cpu()
-                            moved_count += 1
-                    print(f"[MINER] Moved {moved_count} parameters/buffers to CPU", flush=True)
-                else:
-                    # Standard model movement - this should work better now
-                    print(f"[MINER] Moving standard model to CPU...", flush=True)
-                    # Delete any cached activations first
-                    if hasattr(self.model, 'cache'):
+        import gc
+        if self.model is None or not torch.cuda.is_available():
+            return
+        try:
+            initial_mem = torch.cuda.mem_get_info()[0] / 1024**3
+            print(f"[MINER] GPU memory before moving model to CPU: {initial_mem:.2f} GB", flush=True)
+
+            if hasattr(self.model, 'hf_device_map'):
+                print(f"[MINER] Model uses device_map, using aggressive CPU offloading...", flush=True)
+                moved_count = 0
+                for name, param in self.model.named_parameters():
+                    if param.is_cuda:
+                        param.data = param.data.cpu()
+                        moved_count += 1
+                for name, buffer in self.model.named_buffers():
+                    if buffer.is_cuda:
+                        buffer.data = buffer.data.cpu()
+                        moved_count += 1
+                print(f"[MINER] Moved {moved_count} parameters/buffers to CPU", flush=True)
+            else:
+                print(f"[MINER] Moving standard model to CPU...", flush=True)
+                if hasattr(self.model, 'cache'):
+                    try:
                         del self.model.cache
-                    
-                    # Move model to CPU
-                    self.model = self.model.to('cpu')
-                    
-                    # Explicitly move all parameters (in case some didn't move)
-                    for param in self.model.parameters():
-                        if param.is_cuda:
-                            param.data = param.data.cpu()
-                
-                # Force aggressive cleanup - multiple passes
-                for _ in range(3):
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                    import gc
-                    gc.collect()
-                
+                    except Exception:
+                        pass
+                # Move to CPU and drop reference to old GPU model so GC can free it
+                old_model = self.model
+                self.model = old_model.to('cpu')
+                del old_model
+                gc.collect()
+                # Ensure no parameter still on GPU
+                for param in self.model.parameters():
+                    if param.is_cuda:
+                        param.data = param.data.cpu()
+                for name, buffer in self.model.named_buffers():
+                    if buffer.is_cuda:
+                        buffer.data = buffer.data.cpu()
+
+            # Aggressive cleanup: GC first so Python frees GPU tensors, then empty cache
+            for _ in range(5):
+                gc.collect()
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-                
-                # Verify memory freed
-                final_mem = torch.cuda.mem_get_info()[0] / 1024**3
-                freed_mem = final_mem - initial_mem
-                print(f"[MINER] Model moved to CPU. GPU memory: {initial_mem:.2f} GB -> {final_mem:.2f} GB (freed {freed_mem:.2f} GB)", flush=True)
-                
-                if freed_mem < 5.0:
-                    print(f"[MINER] ⚠️  WARNING: Only freed {freed_mem:.2f} GB. Model may not have moved completely.", flush=True)
-                    print(f"[MINER] ⚠️  This may cause OOM during tests. Consider using MINER_USE_DEVICE_MAP=false", flush=True)
-                
-                # Verify model is actually on CPU
-                try:
-                    model_device = next(self.model.parameters()).device
-                    if model_device.type == 'cpu':
-                        print(f"[MINER] ✅ Verified: Model is on CPU", flush=True)
-                    else:
-                        print(f"[MINER] ⚠️  Warning: Model device is {model_device}, expected CPU", flush=True)
-                except StopIteration:
-                    print(f"[MINER] ⚠️  Warning: Could not verify model device", flush=True)
-                    
-            except Exception as e:
-                print(f"[MINER] ⚠️  Error moving model to CPU: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            final_mem = torch.cuda.mem_get_info()[0] / 1024**3
+            freed_mem = final_mem - initial_mem
+            print(f"[MINER] Model moved to CPU. GPU memory: {initial_mem:.2f} GB -> {final_mem:.2f} GB (freed {freed_mem:.2f} GB)", flush=True)
+
+            if freed_mem < 5.0:
+                print(f"[MINER] ⚠️  WARNING: Only freed {freed_mem:.2f} GB. Model may not have moved completely.", flush=True)
+                print(f"[MINER] ⚠️  This may cause OOM during tests. Consider using MINER_USE_DEVICE_MAP=false", flush=True)
+
+            try:
+                model_device = next(self.model.parameters()).device
+                if model_device.type == 'cpu':
+                    print(f"[MINER] ✅ Verified: Model is on CPU", flush=True)
+                else:
+                    print(f"[MINER] ⚠️  Warning: Model device is {model_device}, expected CPU", flush=True)
+            except StopIteration:
+                print(f"[MINER] ⚠️  Warning: Could not verify model device", flush=True)
+        except Exception as e:
+            print(f"[MINER] ⚠️  Error moving model to CPU: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
     def categorize_error(self, error_output: str) -> dict:
         """Categorize error and provide specific fix strategy (Phase 2: Error pattern recognition)."""
@@ -1136,53 +1135,10 @@ class Miner(BaseMinerNeuron):
                     for error_type, count in sorted(self.successful_fixes.items(), key=lambda x: x[1], reverse=True):
                         print(f"[MINER]   {error_type}: {count} fixes", flush=True)
 
-            # Install and Test
-            try:
-                print("[MINER] Installing package...", flush=True)
-                # Ensure we are in the repo path
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "-e", "."],
-                    cwd=repo_path,
-                    check=True,
-                    capture_output=True
-                )
-                
-                print("[MINER] Running tests...", flush=True)
-                # Location of the test script we created
-                # It is likely in c:\quasar-kimi\tests\test_quasar_mining.py
-                # We need to find absolute path
-                test_script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tests", "test_quasar_mining.py")
-                if not os.path.exists(test_script_path):
-                     # Fallback to current dir / tests
-                     test_script_path = os.path.abspath("tests/test_quasar_mining.py")
-
-                result = subprocess.run(
-                    [sys.executable, test_script_path],
-                    cwd=repo_path, 
-                    capture_output=True,
-                    text=True
-                )
-                
-                print(result.stdout)
-                if result.returncode != 0:
-                    print(f"[MINER] Tests Failed:\n{result.stderr}", flush=True)
-                else:
-                    print(f"[MINER] Tests Passed!", flush=True)
-                    # Extract score
-                    tps_match = re.search(r"QuasarAttention achieved: (\d+) tokens/sec", result.stdout)
-                    if tps_match:
-                        score = float(tps_match.group(1))
-                        bt.logging.info(f"Iteration {iteration} score: {score}")
-                        print(f"[MINER] Benchmark Score: {score} tokens/sec")
-                        
-                        # Submit
-                        commit_hash = self.get_commit_hash(repo_path)
-                        self.submit_to_validator(fork_url, commit_hash, score)
-                        
-            except Exception as e:
-                print(f"[MINER] Error during build/test: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
+            # Do NOT run install/test again here - the retry loop already did it.
+            # Running tests again here would run with the model still on GPU (miner process
+            # holds ~43 GB), so the test subprocess would OOM. Only the loop above runs tests
+            # (after moving the model to CPU).
 
             print(f"[MINER] Waiting {self.optimization_interval}s...", flush=True)
             time.sleep(self.optimization_interval)

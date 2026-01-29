@@ -228,9 +228,8 @@ def test_quasar_stacked_benchmark():
         free_mem = torch.cuda.mem_get_info()[0] / 1024**3
         print(f"GPU memory before stacked test: {free_mem:.2f} GB free")
         
-        # Adjust parameters based on available memory - be more conservative
+        # Adjust parameters based on available memory - be conservative to avoid OOM
         if free_mem < 5.0:
-            # Very limited memory - use minimal config
             batch_size = 1
             hidden_size = 512
             num_heads = 4
@@ -238,7 +237,6 @@ def test_quasar_stacked_benchmark():
             seq_lens = [20000]
             print(f"Very low memory ({free_mem:.2f} GB), using minimal config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
         elif free_mem < 10.0:
-            # Limited memory - use smaller config
             batch_size = 1
             hidden_size = 1024
             num_heads = 8
@@ -246,15 +244,21 @@ def test_quasar_stacked_benchmark():
             seq_lens = [50000]
             print(f"Low memory ({free_mem:.2f} GB), using reduced config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
         elif free_mem < 20.0:
-            # Moderate memory - use medium config
             batch_size = 1
             hidden_size = 1536
             num_heads = 12
             n_layers = 16
             seq_lens = [75000]
             print(f"Moderate memory ({free_mem:.2f} GB), using medium config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
+        elif free_mem < 40.0:
+            # 20–40 GB: use medium config to avoid OOM (full config can OOM at ~38 GB)
+            batch_size = 1
+            hidden_size = 1536
+            num_heads = 12
+            n_layers = 16
+            seq_lens = [75000]
+            print(f"Memory {free_mem:.2f} GB (avoiding full config), using medium: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
         else:
-            # Sufficient memory - use full config
             batch_size = 1
             hidden_size = 2048
             num_heads = 16
