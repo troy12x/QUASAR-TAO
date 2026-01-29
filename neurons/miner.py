@@ -195,6 +195,16 @@ class Miner(BaseMinerNeuron):
                 print(f" Model Device: {self.model.device}")
                 
             self.model.eval()
+            
+            # Ensure generation_config exists (required for generation)
+            if not hasattr(self.model, 'generation_config') or self.model.generation_config is None:
+                print("[MINER] Setting up generation_config...", flush=True)
+                from transformers import GenerationConfig
+                try:
+                    self.model.generation_config = GenerationConfig.from_model_config(self.model.config)
+                except Exception:
+                    self.model.generation_config = GenerationConfig()
+            
             print(f"\n [MINER] MY HOTKEY SS58: {self.wallet.hotkey.ss58_address} (COPY THIS FOR DASHBOARD)\n")
             bt.logging.info(f"Model loaded successfully: {self.model_name}")
             
@@ -259,6 +269,66 @@ class Miner(BaseMinerNeuron):
         print(f"  - Max New Tokens: {self.agent_max_new_tokens}", flush=True)
         print(f"  - Max Retries: {int(os.getenv('MINER_MAX_RETRIES', '20'))}", flush=True)
 
+    def _clean_gpu_memory(self):
+        """Aggressively clean GPU memory - clear all caches and force garbage collection."""
+        import gc
+        if not torch.cuda.is_available():
+            return
+        
+        # Clear any cached activations or intermediate states
+        if self.model is not None:
+            # Clear any cached states in the model (but NOT generation_config - it's required!)
+            for attr in ['cache', 'past_key_values', '_past_key_values']:
+                if hasattr(self.model, attr):
+                    try:
+                        cached = getattr(self.model, attr)
+                        if cached is not None:
+                            if isinstance(cached, dict):
+                                cached.clear()
+                            elif isinstance(cached, (list, tuple)):
+                                for item in cached:
+                                    if hasattr(item, 'cpu'):
+                                        _ = item.cpu()
+                                    del item
+                            delattr(self.model, attr)
+                    except Exception:
+                        pass
+            
+            # Clear any module-level caches
+            for module in self.model.modules():
+                for attr in ['cache', 'past_key_values', '_past_key_values']:
+                    if hasattr(module, attr):
+                        try:
+                            delattr(module, attr)
+                        except Exception:
+                            pass
+        
+        # Multiple rounds of aggressive cleanup
+        for round_num in range(10):
+            # Python garbage collection
+            gc.collect()
+            
+            # Clear PyTorch CUDA cache
+            torch.cuda.empty_cache()
+            
+            # Synchronize to ensure operations complete
+            torch.cuda.synchronize()
+            
+            # Reset peak memory stats to clear tracking overhead
+            if round_num == 0:
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                except Exception:
+                    pass
+        
+        # Final cleanup
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        
+        # Small delay to let CUDA driver release memory
+        time.sleep(0.5)
+
     def _move_model_to_cpu(self):
         """Temporarily move model to CPU to free GPU memory for tests."""
         import gc
@@ -268,54 +338,85 @@ class Miner(BaseMinerNeuron):
             initial_mem = torch.cuda.mem_get_info()[0] / 1024**3
             print(f"[MINER] GPU memory before moving model to CPU: {initial_mem:.2f} GB", flush=True)
 
+            # Step 1: Clean any cached states before moving
+            print(f"[MINER] Cleaning cached states...", flush=True)
+            self._clean_gpu_memory()
+
+            # Step 2: Move model to CPU
             if hasattr(self.model, 'hf_device_map'):
                 print(f"[MINER] Model uses device_map, using aggressive CPU offloading...", flush=True)
                 moved_count = 0
                 for name, param in self.model.named_parameters():
                     if param.is_cuda:
-                        param.data = param.data.cpu()
+                        # Create new CPU tensor and replace
+                        cpu_param = param.data.cpu()
+                        param.data = cpu_param
                         moved_count += 1
                 for name, buffer in self.model.named_buffers():
                     if buffer.is_cuda:
-                        buffer.data = buffer.data.cpu()
+                        cpu_buffer = buffer.data.cpu()
+                        buffer.data = cpu_buffer
                         moved_count += 1
                 print(f"[MINER] Moved {moved_count} parameters/buffers to CPU", flush=True)
             else:
                 print(f"[MINER] Moving standard model to CPU...", flush=True)
+                
+                # Clear any cached activations first
                 if hasattr(self.model, 'cache'):
                     try:
                         del self.model.cache
                     except Exception:
                         pass
-                # Move to CPU and drop reference to old GPU model so GC can free it
+                
+                # Move to CPU and explicitly delete old GPU model reference
                 old_model = self.model
                 self.model = old_model.to('cpu')
+                
+                # Explicitly delete old model to break GPU references
                 del old_model
                 gc.collect()
-                # Ensure no parameter still on GPU
+                
+                # Force move any remaining GPU parameters/buffers
                 for param in self.model.parameters():
                     if param.is_cuda:
-                        param.data = param.data.cpu()
+                        cpu_param = param.data.cpu()
+                        param.data = cpu_param
+                        del cpu_param
                 for name, buffer in self.model.named_buffers():
                     if buffer.is_cuda:
-                        buffer.data = buffer.data.cpu()
+                        cpu_buffer = buffer.data.cpu()
+                        buffer.data = cpu_buffer
+                        del cpu_buffer
 
-            # Aggressive cleanup: GC first so Python frees GPU tensors, then empty cache
-            for _ in range(5):
-                gc.collect()
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            gc.collect()
-            torch.cuda.empty_cache()
+            # Step 3: Aggressive cleanup after moving
+            print(f"[MINER] Performing aggressive GPU memory cleanup...", flush=True)
+            self._clean_gpu_memory()
 
+            # Step 4: Verify memory freed
             final_mem = torch.cuda.mem_get_info()[0] / 1024**3
             freed_mem = final_mem - initial_mem
             print(f"[MINER] Model moved to CPU. GPU memory: {initial_mem:.2f} GB -> {final_mem:.2f} GB (freed {freed_mem:.2f} GB)", flush=True)
 
             if freed_mem < 5.0:
                 print(f"[MINER] ⚠️  WARNING: Only freed {freed_mem:.2f} GB. Model may not have moved completely.", flush=True)
-                print(f"[MINER] ⚠️  This may cause OOM during tests. Consider using MINER_USE_DEVICE_MAP=false", flush=True)
+                print(f"[MINER] ⚠️  Attempting emergency cleanup...", flush=True)
+                
+                # Emergency: try to force free by resetting CUDA context
+                try:
+                    # One more aggressive pass
+                    for _ in range(20):
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                    time.sleep(1.0)  # Longer delay
+                    
+                    final_mem_emergency = torch.cuda.mem_get_info()[0] / 1024**3
+                    freed_mem_emergency = final_mem_emergency - initial_mem
+                    print(f"[MINER] After emergency cleanup: {final_mem_emergency:.2f} GB free (freed {freed_mem_emergency:.2f} GB total)", flush=True)
+                except Exception as e:
+                    print(f"[MINER] Emergency cleanup failed: {e}", flush=True)
 
+            # Step 5: Verify model is actually on CPU
             try:
                 model_device = next(self.model.parameters()).device
                 if model_device.type == 'cpu':
@@ -324,6 +425,7 @@ class Miner(BaseMinerNeuron):
                     print(f"[MINER] ⚠️  Warning: Model device is {model_device}, expected CPU", flush=True)
             except StopIteration:
                 print(f"[MINER] ⚠️  Warning: Could not verify model device", flush=True)
+                
         except Exception as e:
             print(f"[MINER] ⚠️  Error moving model to CPU: {e}", flush=True)
             import traceback
@@ -464,6 +566,17 @@ class Miner(BaseMinerNeuron):
         """Move model back to GPU after tests."""
         if self.model is not None and torch.cuda.is_available():
             try:
+                # Ensure generation_config exists before moving (it's required for generation)
+                if not hasattr(self.model, 'generation_config') or self.model.generation_config is None:
+                    print("[MINER] Recreating generation_config...", flush=True)
+                    from transformers import GenerationConfig
+                    # Create a default generation config if missing
+                    try:
+                        self.model.generation_config = GenerationConfig.from_model_config(self.model.config)
+                    except Exception:
+                        # Fallback: create minimal config
+                        self.model.generation_config = GenerationConfig()
+                
                 # Handle models loaded with device_map="auto"
                 if hasattr(self.model, 'hf_device_map'):
                     # Use device_map="auto" to restore original device mapping
@@ -481,6 +594,8 @@ class Miner(BaseMinerNeuron):
                 print("[MINER] Model moved back to GPU", flush=True)
             except Exception as e:
                 print(f"[MINER] Warning: Could not move model back to GPU: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
 
     def _sign_message(self, message: str) -> str:
         """Sign a message with the wallet's private key."""
@@ -879,15 +994,11 @@ class Miner(BaseMinerNeuron):
                 print() 
                 
                 # Aggressively clear GPU memory after generation
-                print("[MINER] Clearing GPU memory...", flush=True)
+                print("[MINER] Clearing GPU memory after code generation...", flush=True)
                 del input_ids
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                import gc
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    # Use the aggressive cleanup method
+                    self._clean_gpu_memory()
                 print(f"[MINER] GPU memory cleared. Free: {torch.cuda.mem_get_info()[0] / 1024**3:.2f} GB", flush=True)
 
  
@@ -995,15 +1106,9 @@ class Miner(BaseMinerNeuron):
                     
                     # Verify model is on CPU and get final memory state
                     if torch.cuda.is_available():
-                        # Additional aggressive cleanup
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
-                        import gc
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
-                        gc.collect()
-                        torch.cuda.empty_cache()
+                        # Additional aggressive cleanup before tests
+                        print("[MINER] Final GPU memory cleanup before tests...", flush=True)
+                        self._clean_gpu_memory()
                         
                         free_mem = torch.cuda.mem_get_info()[0] / 1024**3
                         total_mem = torch.cuda.mem_get_info()[1] / 1024**3
@@ -1042,10 +1147,6 @@ class Miner(BaseMinerNeuron):
                         env=env
                     )
                     
-                    # Move model back to GPU after tests
-                    print("[MINER] Moving model back to GPU...", flush=True)
-                    self._move_model_to_gpu()
-                    
                     if result.returncode != 0:
                         print(f"[MINER] Tests Failed:\n{result.stderr}", flush=True)
                         
@@ -1062,14 +1163,14 @@ class Miner(BaseMinerNeuron):
                             self.error_statistics[error_info['type']] = self.error_statistics.get(error_info['type'], 0) + 1
                             
                             # Clear GPU memory after OOM (model should already be on CPU)
-                            print("[MINER] OOM detected, clearing GPU memory...", flush=True)
+                            print("[MINER] OOM detected, performing aggressive GPU memory cleanup...", flush=True)
                             if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                                import gc
-                                gc.collect()
-                                torch.cuda.empty_cache()
+                                # Use aggressive cleanup
+                                self._clean_gpu_memory()
                                 # Ensure model is on CPU
                                 self._move_model_to_cpu()
+                                # One more cleanup pass
+                                self._clean_gpu_memory()
                             
                             previous_error = (
                                 f"CUDA Out of Memory Error detected.\n"
@@ -1091,6 +1192,9 @@ class Miner(BaseMinerNeuron):
                                 f"STDERR:\n{result.stderr}\n\n"
                                 f"CRITICAL: Fix the specific error shown above. Deeply analyze the trace and correct your code."
                             )
+                        # Move model back to GPU for next retry attempt (need to generate code)
+                        print("[MINER] Moving model back to GPU for next retry...", flush=True)
+                        self._move_model_to_gpu()
                         continue # Retry
                     else:
                         print(result.stdout)
@@ -1108,6 +1212,10 @@ class Miner(BaseMinerNeuron):
                                 error_type = error_info.get('type', 'unknown')
                                 self.successful_fixes[error_type] = self.successful_fixes.get(error_type, 0) + 1
                                 print(f"[MINER] ✅ Successfully fixed {error_type} error (total fixes for this type: {self.successful_fixes[error_type]})", flush=True)
+                            
+                            # Move model back to GPU for next iteration
+                            print("[MINER] Moving model back to GPU...", flush=True)
+                            self._move_model_to_gpu()
                             
                             # Submit
                             commit_hash = self.get_commit_hash(repo_path)
