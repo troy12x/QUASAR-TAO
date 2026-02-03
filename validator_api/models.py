@@ -105,6 +105,26 @@ class SpeedSubmission(Base):
     is_baseline = Column(Boolean, default=False)  # Mark baseline submissions
     solution_hash = Column(String, nullable=True, index=True)  # Hash of solution for duplicate detection
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # COMMIT-REVEAL FIELDS (from const's qllm architecture)
+    # Prevents validators from copying miner code before evaluation
+    # ═══════════════════════════════════════════════════════════════════════════
+    commitment_hash = Column(String, nullable=True, index=True)  # SHA256 hash of salt + docker_image
+    commitment_salt = Column(String, nullable=True)  # Random salt for commitment (hex encoded)
+    reveal_block = Column(Integer, nullable=True)  # Block at which reveal occurs
+    is_revealed = Column(Boolean, default=True)  # Whether commitment has been revealed (True for legacy submissions)
+    docker_image = Column(String, nullable=True)  # Docker image for inference (optional, for container-based miners)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # LOGIT VERIFICATION FIELDS (from const's qllm architecture)
+    # Verifies miners are running the actual model, not returning bogus values
+    # ═══════════════════════════════════════════════════════════════════════════
+    logit_verification_passed = Column(Boolean, nullable=True)  # Whether miner passed logit verification
+    cosine_similarity = Column(Float, nullable=True)  # Cosine similarity between miner and reference logits
+    max_abs_diff = Column(Float, nullable=True)  # Maximum absolute difference in logits
+    verification_reason = Column(String, nullable=True)  # Reason for verification failure (if any)
+    throughput_verified = Column(Float, nullable=True)  # Verified throughput (tok/sec) from logit check
+    
     # Relationships
     round = relationship("CompetitionRound", back_populates="submissions", foreign_keys=[round_id])
 
@@ -241,3 +261,84 @@ class CreateRoundRequest(BaseModel):
     """Request to create a new round."""
     duration_hours: int = 48  # Default 2 days
     baseline_submission_id: Optional[int] = None  # For round 2+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMIT-REVEAL MODELS (from const's qllm architecture)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CommitSubmissionRequest(BaseModel):
+    """Request to commit a submission (Phase 1 of commit-reveal)."""
+    miner_hotkey: str
+    commitment_hash: str  # SHA256(salt + docker_image or fork_url)
+    target_sequence_length: int
+    signature: str
+
+
+class CommitSubmissionResponse(BaseModel):
+    """Response after committing a submission."""
+    submission_id: int
+    commitment_hash: str
+    reveal_block: int
+    estimated_reveal_time: str  # ISO format datetime
+    message: str
+
+
+class RevealSubmissionRequest(BaseModel):
+    """Request to reveal a committed submission (Phase 2 of commit-reveal)."""
+    submission_id: int
+    miner_hotkey: str
+    commitment_salt: str  # Hex-encoded salt used in commitment
+    fork_url: str
+    commit_hash: str
+    tokens_per_sec: float
+    vram_mb: Optional[float] = None
+    benchmarks: Optional[Dict[str, Dict[str, float]]] = None
+    docker_image: Optional[str] = None  # Optional Docker image for container-based miners
+    signature: str
+
+
+class RevealSubmissionResponse(BaseModel):
+    """Response after revealing a submission."""
+    submission_id: int
+    miner_hotkey: str
+    fork_url: str
+    commit_hash: str
+    is_revealed: bool
+    message: str
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LOGIT VERIFICATION MODELS (from const's qllm architecture)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LogitVerificationResult(BaseModel):
+    """Result of logit verification."""
+    submission_id: int
+    verified: bool
+    cosine_similarity: Optional[float] = None
+    max_abs_diff: Optional[float] = None
+    throughput: Optional[float] = None  # Verified throughput in tok/sec
+    reason: Optional[str] = None
+
+
+class SubmissionWithVerification(BaseModel):
+    """Submission with verification details."""
+    id: int
+    miner_hotkey: str
+    fork_url: str
+    commit_hash: str
+    target_sequence_length: int
+    tokens_per_sec: float
+    vram_mb: Optional[float] = None
+    validated: bool
+    is_revealed: bool
+    logit_verification_passed: Optional[bool] = None
+    cosine_similarity: Optional[float] = None
+    max_abs_diff: Optional[float] = None
+    throughput_verified: Optional[float] = None
+    round_id: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

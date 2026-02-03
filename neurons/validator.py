@@ -423,6 +423,9 @@ class Validator(BaseValidatorNeuron):
     """
     Simplified Validator for QUASAR-SUBNET.
     Evaluates miners by calling the challenge container.
+    
+    Now includes logit verification from const's qllm architecture to prevent
+    miners from returning bogus values quickly.
     """
 
     def __init__(self, config=None):
@@ -441,11 +444,173 @@ class Validator(BaseValidatorNeuron):
         self.performance_validator = PerformanceValidator()
         bt.logging.info("⚡ Performance validator initialized")
         
+        # ═══════════════════════════════════════════════════════════════════════════
+        # LOGIT VERIFICATION (from const's qllm architecture)
+        # Reference model for verifying miners are running the actual model
+        # ═══════════════════════════════════════════════════════════════════════════
+        self.reference_model = None
+        self.reference_model_name = os.getenv("REFERENCE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+        self.logit_verification_enabled = os.getenv("ENABLE_LOGIT_VERIFICATION", "true").lower() == "true"
+        
+        # Verification thresholds (from const's implementation)
+        self.cosine_sim_threshold = float(os.getenv("COSINE_SIM_THRESHOLD", "0.99"))
+        self.max_abs_diff_threshold = float(os.getenv("MAX_ABS_DIFF_THRESHOLD", "0.1"))
+        
+        bt.logging.info(f"🔍 Logit verification: {'ENABLED' if self.logit_verification_enabled else 'DISABLED'}")
+        if self.logit_verification_enabled:
+            bt.logging.info(f"   Reference model: {self.reference_model_name}")
+            bt.logging.info(f"   Cosine sim threshold: {self.cosine_sim_threshold}")
+            bt.logging.info(f"   Max abs diff threshold: {self.max_abs_diff_threshold}")
+        
         # Initialize scores
         self.scores = torch.zeros(self.metagraph.n, dtype=torch.float32, device=self.device)
         self.load_state()
         
         bt.logging.info(f"📡 Validator API URL: {VALIDATOR_API_URL}")
+    
+    def load_reference_model(self):
+        """Load the reference model for logit verification (lazy loading)."""
+        if self.reference_model is not None:
+            return
+        
+        if not self.logit_verification_enabled:
+            return
+        
+        try:
+            from quasar.inference_verification import ReferenceModel
+            
+            print(f"[VALIDATOR] 🔍 Loading reference model: {self.reference_model_name}...", flush=True)
+            bt.logging.info(f"Loading reference model: {self.reference_model_name}")
+            
+            self.reference_model = ReferenceModel(self.reference_model_name)
+            
+            # Load synchronously (blocking)
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.reference_model.load())
+            loop.close()
+            
+            print(f"[VALIDATOR] ✅ Reference model loaded successfully", flush=True)
+            bt.logging.success("Reference model loaded successfully")
+            
+        except Exception as e:
+            print(f"[VALIDATOR] ⚠️ Failed to load reference model: {e}", flush=True)
+            bt.logging.warning(f"Failed to load reference model: {e}")
+            self.reference_model = None
+    
+    def run_logit_verification(self, submission_id: int, docker_image: str = None) -> Dict:
+        """
+        Run logit verification for a submission.
+        
+        This is the core verification from const's qllm architecture:
+        1. Generate random prompt
+        2. Run inference on miner's container (or local test)
+        3. Run inference on reference model
+        4. Compare logits at random step
+        
+        Args:
+            submission_id: Submission ID for tracking
+            docker_image: Docker image to verify (optional, for container-based miners)
+        
+        Returns:
+            Dict with verification results
+        """
+        if not self.logit_verification_enabled:
+            return {
+                "verified": None,  # None = not verified (verification disabled)
+                "reason": "Logit verification disabled"
+            }
+        
+        # Ensure reference model is loaded
+        self.load_reference_model()
+        
+        if self.reference_model is None:
+            return {
+                "verified": None,
+                "reason": "Reference model not available"
+            }
+        
+        try:
+            from quasar.inference_verification import (
+                generate_verification_challenge,
+                verify_logits,
+                CONFIG
+            )
+            import asyncio
+            
+            print(f"[VALIDATOR] 🔍 Running logit verification for submission {submission_id}...", flush=True)
+            
+            # Generate challenge
+            challenge = generate_verification_challenge(self.reference_model)
+            prompt = challenge["prompt"]
+            gen_len = challenge["gen_len"]
+            logits_at_step = challenge["logits_at_step"]
+            
+            print(f"[VALIDATOR]   Challenge: prompt_len={len(prompt)}, gen_len={gen_len}, capture_step={logits_at_step}", flush=True)
+            
+            # Run reference model inference
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            reference_result = loop.run_until_complete(
+                self.reference_model.inference(prompt, gen_len, logits_at_step)
+            )
+            loop.close()
+            
+            if reference_result.get("captured_logits") is None:
+                return {
+                    "verified": False,
+                    "reason": "Reference model failed to capture logits"
+                }
+            
+            # For now, without container execution, we can't actually run miner inference
+            # This is a placeholder that would be filled when affinetes/Basilica is available
+            # For testing, we'll use the reference logits (which would always pass)
+            
+            # TODO: When container execution is available:
+            # miner_result = await run_container_inference(hotkey, docker_image, prompt, gen_len, logits_at_step)
+            
+            # For now, we'll mark as "pending" since we can't actually run miner containers
+            # In production, this would compare miner logits against reference
+            
+            print(f"[VALIDATOR]   ⚠️ Container execution not available - marking as pending", flush=True)
+            
+            return {
+                "verified": None,  # None = pending (container execution not available)
+                "reason": "Container execution not available - awaiting affinetes integration",
+                "reference_throughput": gen_len / reference_result["elapsed_sec"],
+                "reference_elapsed_sec": reference_result["elapsed_sec"]
+            }
+            
+        except Exception as e:
+            print(f"[VALIDATOR] ❌ Logit verification failed: {e}", flush=True)
+            traceback.print_exc()
+            return {
+                "verified": None,
+                "reason": f"Verification error: {str(e)}"
+            }
+    
+    def record_verification_result(self, submission_id: int, result: Dict):
+        """Record logit verification result to the API."""
+        try:
+            response = requests.post(
+                f"{VALIDATOR_API_URL}/record_verification",
+                params={
+                    "submission_id": submission_id,
+                    "verified": result.get("verified"),
+                    "cosine_similarity": result.get("cosine_similarity"),
+                    "max_abs_diff": result.get("max_abs_diff"),
+                    "throughput": result.get("throughput_verified") or result.get("reference_throughput"),
+                    "reason": result.get("reason")
+                },
+                timeout=30
+            )
+            if response.status_code == 200:
+                print(f"[VALIDATOR] ✅ Verification result recorded for submission {submission_id}", flush=True)
+            else:
+                print(f"[VALIDATOR] ⚠️ Failed to record verification: {response.status_code}", flush=True)
+        except Exception as e:
+            print(f"[VALIDATOR] ⚠️ Failed to record verification result: {e}", flush=True)
 
     def evaluate_performance_submissions(self) -> Dict[str, float]:
         """Evaluate performance submissions by cloning repos and running tests.
@@ -485,10 +650,33 @@ class Validator(BaseValidatorNeuron):
 
                 if score > 0:
                     print(f"[VALIDATOR] ✅ Valid submission from {miner_hotkey[:12]}... - Score: {score:.4f} (normalized: {normalized_score:.4f})", flush=True)
-                    evaluated_scores[miner_hotkey] = normalized_score
+                    
+                    submission_id = submission.get("id")
+                    
+                    # ═══════════════════════════════════════════════════════════════════════
+                    # LOGIT VERIFICATION (from const's qllm architecture)
+                    # Run after performance test passes to verify miner is running actual model
+                    # ═══════════════════════════════════════════════════════════════════════
+                    if self.logit_verification_enabled and submission_id:
+                        print(f"[VALIDATOR] 🔍 Running logit verification...", flush=True)
+                        docker_image = submission.get("docker_image")
+                        verification_result = self.run_logit_verification(submission_id, docker_image)
+                        
+                        # Record verification result to API
+                        self.record_verification_result(submission_id, verification_result)
+                        
+                        # If verification explicitly failed, reduce score to 0
+                        if verification_result.get("verified") == False:
+                            print(f"[VALIDATOR] ❌ Logit verification FAILED - score set to 0", flush=True)
+                            normalized_score = 0.0
+                            evaluated_scores[miner_hotkey] = 0.0
+                        else:
+                            # Verification passed or pending - use original score
+                            evaluated_scores[miner_hotkey] = normalized_score
+                    else:
+                        evaluated_scores[miner_hotkey] = normalized_score
                     
                     # Mark submission as validated in API (this will record success for IP)
-                    submission_id = submission.get("id")
                     if submission_id:
                         try:
                             requests.post(

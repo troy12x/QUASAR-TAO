@@ -184,6 +184,44 @@ with engine.connect() as conn:
             conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN solution_hash VARCHAR"))
             conn.commit()
         
+        # ═══════════════════════════════════════════════════════════════════════════
+        # COMMIT-REVEAL COLUMNS (from const's qllm architecture)
+        # ═══════════════════════════════════════════════════════════════════════════
+        if "commitment_hash" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN commitment_hash VARCHAR"))
+            conn.commit()
+        if "commitment_salt" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN commitment_salt VARCHAR"))
+            conn.commit()
+        if "reveal_block" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN reveal_block INTEGER"))
+            conn.commit()
+        if "is_revealed" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN is_revealed BOOLEAN DEFAULT TRUE"))
+            conn.commit()
+        if "docker_image" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN docker_image VARCHAR"))
+            conn.commit()
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # LOGIT VERIFICATION COLUMNS (from const's qllm architecture)
+        # ═══════════════════════════════════════════════════════════════════════════
+        if "logit_verification_passed" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN logit_verification_passed BOOLEAN"))
+            conn.commit()
+        if "cosine_similarity" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN cosine_similarity REAL"))
+            conn.commit()
+        if "max_abs_diff" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN max_abs_diff REAL"))
+            conn.commit()
+        if "verification_reason" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN verification_reason VARCHAR"))
+            conn.commit()
+        if "throughput_verified" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN throughput_verified REAL"))
+            conn.commit()
+        
         # Check if competition_rounds table exists
         result = conn.execute(text("""
             SELECT EXISTS (
@@ -232,9 +270,47 @@ with engine.connect() as conn:
         if "solution_hash" not in columns:
             conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN solution_hash TEXT"))
             conn.commit()
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # COMMIT-REVEAL COLUMNS (from const's qllm architecture)
+        # ═══════════════════════════════════════════════════════════════════════════
+        if "commitment_hash" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN commitment_hash TEXT"))
+            conn.commit()
+        if "commitment_salt" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN commitment_salt TEXT"))
+            conn.commit()
+        if "reveal_block" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN reveal_block INTEGER"))
+            conn.commit()
+        if "is_revealed" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN is_revealed BOOLEAN DEFAULT 1"))
+            conn.commit()
+        if "docker_image" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN docker_image TEXT"))
+            conn.commit()
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # LOGIT VERIFICATION COLUMNS (from const's qllm architecture)
+        # ═══════════════════════════════════════════════════════════════════════════
+        if "logit_verification_passed" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN logit_verification_passed BOOLEAN"))
+            conn.commit()
+        if "cosine_similarity" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN cosine_similarity REAL"))
+            conn.commit()
+        if "max_abs_diff" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN max_abs_diff REAL"))
+            conn.commit()
+        if "verification_reason" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN verification_reason TEXT"))
+            conn.commit()
+        if "throughput_verified" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN throughput_verified REAL"))
+            conn.commit()
     
     # Commit any pending changes
-            conn.commit()
+    conn.commit()
 
 app = FastAPI(title="Quasar Validator API")
 
@@ -457,6 +533,370 @@ def submit_kernel(
         tokens_per_sec=new_submission.tokens_per_sec,
         created_at=new_submission.created_at
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# COMMIT-REVEAL ENDPOINTS (from const's qllm architecture)
+# Prevents validators from copying miner code before evaluation
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+# Commit-reveal configuration
+BLOCKS_UNTIL_REVEAL = int(os.environ.get("BLOCKS_UNTIL_REVEAL", 100))  # ~20 minutes
+BLOCK_TIME_SECONDS = 12  # Bittensor block time
+
+def get_current_block() -> int:
+    """Get current Bittensor block number (approximation based on time)."""
+    # In production, this should query the actual chain
+    # For now, use time-based approximation (genesis + seconds/12)
+    import time
+    # Approximate genesis time for Bittensor mainnet
+    GENESIS_TIME = 1609459200  # Jan 1, 2021 UTC
+    current_time = int(time.time())
+    return (current_time - GENESIS_TIME) // BLOCK_TIME_SECONDS
+
+
+@app.post("/commit_submission", response_model=models.CommitSubmissionResponse)
+def commit_submission(
+    req: models.CommitSubmissionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    hotkey: str = Depends(auth.verify_signature)
+):
+    """
+    Phase 1 of commit-reveal: Submit a commitment hash.
+    
+    The commitment hash is SHA256(salt + docker_image or fork_url).
+    The actual submission data will be revealed after BLOCKS_UNTIL_REVEAL blocks.
+    
+    This prevents other validators from copying miner code before evaluation.
+    """
+    import traceback
+    try:
+        print(f"🔐 [COMMIT] Miner: {req.miner_hotkey[:8]} | Commitment: {req.commitment_hash[:16]}...")
+        
+        # Verify the hotkey matches the authenticated miner
+        if req.miner_hotkey != hotkey:
+            raise HTTPException(status_code=403, detail="Hotkey mismatch")
+        
+        # Check if miner is registered
+        miner_reg = db.query(models.MinerRegistration).filter(
+            models.MinerRegistration.hotkey == hotkey
+        ).first()
+        
+        if not miner_reg:
+            raise HTTPException(status_code=404, detail="Miner not registered")
+        
+        # Extract IP address
+        client_ip = None
+        if hasattr(request, 'client') and request.client:
+            client_ip = request.client.host
+        if not client_ip:
+            client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        
+        # Check IP ban
+        is_banned, ban_reason = check_ip_ban(client_ip, db)
+        if is_banned:
+            raise HTTPException(status_code=403, detail=f"IP address banned: {ban_reason}")
+        
+        # Check for duplicate commitment hash
+        existing = db.query(models.SpeedSubmission).filter(
+            models.SpeedSubmission.commitment_hash == req.commitment_hash
+        ).first()
+        
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail="Commitment hash already exists. Use a different salt."
+            )
+        
+        # Calculate reveal block
+        current_block = get_current_block()
+        reveal_block = current_block + BLOCKS_UNTIL_REVEAL
+        
+        # Get current round
+        current_round = (
+            db.query(models.CompetitionRound)
+            .filter(models.CompetitionRound.status == "active")
+            .order_by(models.CompetitionRound.round_number.desc())
+            .first()
+        )
+        
+        if not current_round:
+            from datetime import timedelta
+            current_round = models.CompetitionRound(
+                round_number=1,
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow() + timedelta(hours=48),
+                status="active"
+            )
+            db.add(current_round)
+            db.commit()
+            db.refresh(current_round)
+        
+        # Create commitment entry (not revealed yet)
+        new_submission = models.SpeedSubmission(
+            miner_hotkey=req.miner_hotkey,
+            miner_uid=miner_reg.uid,
+            target_sequence_length=req.target_sequence_length,
+            tokens_per_sec=0.0,  # Will be set on reveal
+            signature=req.signature,
+            commitment_hash=req.commitment_hash,
+            reveal_block=reveal_block,
+            is_revealed=False,
+            round_id=current_round.id,
+            ip_address=client_ip
+        )
+        
+        db.add(new_submission)
+        db.commit()
+        db.refresh(new_submission)
+        
+        # Calculate estimated reveal time
+        reveal_seconds = BLOCKS_UNTIL_REVEAL * BLOCK_TIME_SECONDS
+        estimated_reveal = datetime.utcnow() + timedelta(seconds=reveal_seconds)
+        
+        print(f"✅ [COMMIT] Commitment saved. ID: {new_submission.id}, Reveal at block: {reveal_block}")
+        
+        return models.CommitSubmissionResponse(
+            submission_id=new_submission.id,
+            commitment_hash=req.commitment_hash,
+            reveal_block=reveal_block,
+            estimated_reveal_time=estimated_reveal.isoformat(),
+            message=f"Commitment accepted. Reveal after block {reveal_block} (~{reveal_seconds // 60} minutes)"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [COMMIT] Error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/reveal_submission", response_model=models.RevealSubmissionResponse)
+def reveal_submission(
+    req: models.RevealSubmissionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    hotkey: str = Depends(auth.verify_signature)
+):
+    """
+    Phase 2 of commit-reveal: Reveal the actual submission data.
+    
+    The salt + data must hash to the previously committed hash.
+    This can only be called after the reveal block has passed.
+    """
+    import traceback
+    try:
+        print(f"🔓 [REVEAL] Miner: {req.miner_hotkey[:8]} | Submission ID: {req.submission_id}")
+        
+        # Verify the hotkey matches
+        if req.miner_hotkey != hotkey:
+            raise HTTPException(status_code=403, detail="Hotkey mismatch")
+        
+        # Get the commitment
+        submission = db.query(models.SpeedSubmission).filter(
+            models.SpeedSubmission.id == req.submission_id,
+            models.SpeedSubmission.miner_hotkey == req.miner_hotkey
+        ).first()
+        
+        if not submission:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        
+        if submission.is_revealed:
+            raise HTTPException(status_code=409, detail="Submission already revealed")
+        
+        # Check if reveal block has passed
+        current_block = get_current_block()
+        if current_block < submission.reveal_block:
+            blocks_remaining = submission.reveal_block - current_block
+            seconds_remaining = blocks_remaining * BLOCK_TIME_SECONDS
+            raise HTTPException(
+                status_code=425,  # Too Early
+                detail=f"Cannot reveal yet. Wait {blocks_remaining} blocks (~{seconds_remaining // 60} minutes)"
+            )
+        
+        # Verify the commitment hash
+        # Hash should be: SHA256(salt + fork_url) or SHA256(salt + docker_image)
+        reveal_data = req.docker_image if req.docker_image else req.fork_url
+        expected_hash = hashlib.sha256(
+            (req.commitment_salt + reveal_data).encode()
+        ).hexdigest()
+        
+        if expected_hash != submission.commitment_hash:
+            # Record failure for IP banning
+            client_ip = None
+            if hasattr(request, 'client') and request.client:
+                client_ip = request.client.host
+            if client_ip:
+                record_failure(client_ip, db)
+            
+            raise HTTPException(
+                status_code=400,
+                detail="Commitment verification failed. Hash mismatch."
+            )
+        
+        # Calculate solution hash for duplicate detection
+        solution_hash = calculate_solution_hash(
+            req.tokens_per_sec,
+            submission.target_sequence_length,
+            req.benchmarks
+        )
+        
+        # Update submission with revealed data
+        submission.fork_url = req.fork_url
+        submission.commit_hash = req.commit_hash
+        submission.tokens_per_sec = req.tokens_per_sec
+        submission.vram_mb = req.vram_mb
+        submission.benchmarks = json.dumps(req.benchmarks) if req.benchmarks else None
+        submission.docker_image = req.docker_image
+        submission.commitment_salt = req.commitment_salt
+        submission.is_revealed = True
+        submission.solution_hash = solution_hash
+        submission.signature = req.signature
+        
+        db.commit()
+        db.refresh(submission)
+        
+        print(f"✅ [REVEAL] Submission {req.submission_id} revealed successfully")
+        
+        return models.RevealSubmissionResponse(
+            submission_id=submission.id,
+            miner_hotkey=submission.miner_hotkey,
+            fork_url=submission.fork_url,
+            commit_hash=submission.commit_hash,
+            is_revealed=True,
+            message="Submission revealed successfully. Awaiting validation."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [REVEAL] Error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/pending_reveals")
+def get_pending_reveals(
+    db: Session = Depends(get_db)
+):
+    """
+    Get submissions that are pending reveal (commitment made but not yet revealed).
+    """
+    current_block = get_current_block()
+    
+    pending = db.query(models.SpeedSubmission).filter(
+        models.SpeedSubmission.is_revealed == False,
+        models.SpeedSubmission.commitment_hash != None
+    ).all()
+    
+    return {
+        "current_block": current_block,
+        "pending_reveals": [
+            {
+                "submission_id": s.id,
+                "miner_hotkey": s.miner_hotkey,
+                "commitment_hash": s.commitment_hash[:16] + "...",
+                "reveal_block": s.reveal_block,
+                "blocks_remaining": max(0, s.reveal_block - current_block) if s.reveal_block else 0,
+                "can_reveal": s.reveal_block <= current_block if s.reveal_block else False,
+                "created_at": s.created_at.isoformat()
+            }
+            for s in pending
+        ]
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# LOGIT VERIFICATION ENDPOINTS (from const's qllm architecture)
+# Verifies miners are running the actual model, not returning bogus values
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+@app.post("/record_verification")
+def record_verification(
+    submission_id: int,
+    verified: bool,
+    cosine_similarity: Optional[float] = None,
+    max_abs_diff: Optional[float] = None,
+    throughput: Optional[float] = None,
+    reason: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Record logit verification result for a submission.
+    Called by validator after running logit verification.
+    """
+    submission = db.query(models.SpeedSubmission).filter(
+        models.SpeedSubmission.id == submission_id
+    ).first()
+    
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    # Update verification fields
+    submission.logit_verification_passed = verified
+    submission.cosine_similarity = cosine_similarity
+    submission.max_abs_diff = max_abs_diff
+    submission.throughput_verified = throughput
+    submission.verification_reason = reason
+    
+    db.commit()
+    
+    status = "✅ PASSED" if verified else "❌ FAILED"
+    print(f"🔍 [VERIFY] Submission {submission_id}: {status}")
+    if cosine_similarity is not None:
+        print(f"    Cosine similarity: {cosine_similarity:.4f}")
+    if max_abs_diff is not None:
+        print(f"    Max abs diff: {max_abs_diff:.4f}")
+    if reason:
+        print(f"    Reason: {reason}")
+    
+    return {"status": "recorded", "verified": verified}
+
+
+@app.get("/verification_stats")
+def get_verification_stats(
+    round_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Get verification statistics for submissions.
+    """
+    query = db.query(models.SpeedSubmission).filter(
+        models.SpeedSubmission.is_revealed == True
+    )
+    
+    if round_id:
+        query = query.filter(models.SpeedSubmission.round_id == round_id)
+    
+    submissions = query.all()
+    
+    total = len(submissions)
+    verified_passed = sum(1 for s in submissions if s.logit_verification_passed == True)
+    verified_failed = sum(1 for s in submissions if s.logit_verification_passed == False)
+    pending_verification = sum(1 for s in submissions if s.logit_verification_passed is None)
+    
+    avg_cosine = None
+    avg_max_diff = None
+    
+    verified_submissions = [s for s in submissions if s.cosine_similarity is not None]
+    if verified_submissions:
+        avg_cosine = sum(s.cosine_similarity for s in verified_submissions) / len(verified_submissions)
+        diff_submissions = [s for s in verified_submissions if s.max_abs_diff is not None]
+        if diff_submissions:
+            avg_max_diff = sum(s.max_abs_diff for s in diff_submissions) / len(diff_submissions)
+    
+    return {
+        "total_submissions": total,
+        "verified_passed": verified_passed,
+        "verified_failed": verified_failed,
+        "pending_verification": pending_verification,
+        "pass_rate": verified_passed / (verified_passed + verified_failed) if (verified_passed + verified_failed) > 0 else None,
+        "avg_cosine_similarity": avg_cosine,
+        "avg_max_abs_diff": avg_max_diff
+    }
+
 
 @app.get("/get_submission_stats")
 def get_submission_stats(
@@ -891,9 +1331,13 @@ def calculate_rankings(
     Calculate rankings with first-submission-wins logic.
     
     Ranking criteria (in order):
-    1. Weighted score (tokens_per_sec * league_multiplier) - DESC
-    2. Created timestamp (first submission wins) - ASC
-    3. Submission ID (tiebreaker) - ASC
+    1. Logit verification must pass (filter out failed/pending)
+    2. Weighted score (tokens_per_sec * league_multiplier) - DESC
+    3. Created timestamp (first submission wins) - ASC
+    4. Submission ID (tiebreaker) - ASC
+    
+    Note: Submissions that failed logit verification are excluded from rankings.
+    This prevents miners from returning bogus values quickly.
     """
     # Get baseline if exists
     baseline = None
@@ -905,6 +1349,23 @@ def calculate_rankings(
     # Calculate weighted scores
     ranked_submissions = []
     for sub in submissions:
+        # ═══════════════════════════════════════════════════════════════════════
+        # LOGIT VERIFICATION FILTER (from const's qllm architecture)
+        # Skip submissions that failed logit verification or are not revealed
+        # ═══════════════════════════════════════════════════════════════════════
+        
+        # Skip unrevealed submissions (commit-reveal mechanism)
+        if sub.is_revealed == False:
+            print(f"[RANKING] Skipping {sub.miner_hotkey[:8]}...: Not revealed yet")
+            continue
+        
+        # Skip submissions that FAILED logit verification
+        # Note: None means not verified yet, which is allowed for backward compatibility
+        # In strict mode, you could also skip None (pending verification)
+        if sub.logit_verification_passed == False:
+            print(f"[RANKING] Skipping {sub.miner_hotkey[:8]}...: Failed logit verification")
+            continue
+        
         # Skip if below baseline (for round 2+)
         if baseline:
             baseline_league = get_league_for_seq_len(baseline.target_sequence_length)
@@ -932,7 +1393,12 @@ def calculate_rankings(
             "multiplier": multiplier,
             "weighted_score": weighted_score,
             "created_at": sub.created_at,
-            "solution_hash": sub.solution_hash
+            "solution_hash": sub.solution_hash,
+            # Verification info (from const's qllm architecture)
+            "logit_verification_passed": sub.logit_verification_passed,
+            "cosine_similarity": sub.cosine_similarity,
+            "max_abs_diff": sub.max_abs_diff,
+            "throughput_verified": sub.throughput_verified
         })
     
     # Sort by: weighted_score DESC, created_at ASC, submission_id ASC
