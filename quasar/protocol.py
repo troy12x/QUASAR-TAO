@@ -1026,3 +1026,281 @@ class BenchmarkEvaluationSynapse(bt.Synapse):
         variant.expected_consistency_threshold = 0.85  # Default threshold
         
         return variant
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ INFERENCE VERIFICATION PROTOCOL                                            ║
+# ║ Based on const's commit-reveal + logit verification architecture           ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+class InferenceVerificationSynapse(bt.Synapse):
+    """
+    Synapse for inference verification using commit-reveal and logit comparison.
+    
+    This synapse implements const's inference verification mechanism:
+    - Validator sends random prompt + generation length + random step for logit capture
+    - Miner runs inference and returns tokens + captured logits + elapsed time
+    - Validator compares logits against reference model (Qwen/Qwen2.5-0.5B-Instruct)
+    - Verification uses cosine similarity + max absolute diff (not direct comparison
+      due to numerical instability causing divergence after a few tokens)
+    
+    Container interface:
+        inference(prompt, gen_len, logits_at_step) → {tokens, captured_logits, elapsed_sec}
+    
+    Verification thresholds:
+        - Cosine similarity >= 0.99
+        - Max absolute diff <= 0.1
+    
+    Scoring:
+        - Score = 1/throughput if verified (lower is better)
+        - Score = infinity if verification failed
+    
+    Leader selection:
+        - Epsilon-dominance with winner-take-all weights
+    """
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # REQUEST FIELDS (filled by validator)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Random prompt tokens for inference
+    prompt: List[int] = Field(default_factory=list)
+    
+    # Number of tokens to generate
+    gen_len: int = 512
+    
+    # Step at which to capture logits (1-indexed)
+    # e.g., logits_at_step=10 captures logits at the 10th decode step
+    logits_at_step: int = 25
+    
+    # Challenge ID for tracking
+    challenge_id: Optional[str] = None
+    
+    # Challenge timestamp
+    challenge_timestamp: Optional[float] = None
+    
+    # Reference model name (for miner to verify it's using compatible model)
+    reference_model: str = "Qwen/Qwen2.5-0.5B-Instruct"
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # RESPONSE FIELDS (filled by miner)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Generated token IDs
+    tokens: Optional[List[int]] = None
+    
+    # Captured logits at logits_at_step (full vocabulary distribution)
+    captured_logits: Optional[List[float]] = None
+    
+    # Time taken for inference in seconds
+    elapsed_sec: Optional[float] = None
+    
+    # Throughput in tokens per second
+    throughput: Optional[float] = None
+    
+    # Miner's Docker image (for identification)
+    docker_image: Optional[str] = None
+    
+    # Miner's model name (should match reference)
+    miner_model: Optional[str] = None
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # VERIFICATION FIELDS (filled by validator after evaluation)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Whether the miner passed verification
+    verified: Optional[bool] = None
+    
+    # Cosine similarity between miner and reference logits
+    cosine_similarity: Optional[float] = None
+    
+    # Maximum absolute difference between logits
+    max_abs_diff: Optional[float] = None
+    
+    # Verification failure reason (if any)
+    verification_reason: Optional[str] = None
+    
+    # Final score (1/throughput if verified, infinity if failed)
+    score: Optional[float] = None
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # AUDIT FIELDS
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Hash of the captured logits for audit
+    logits_hash: Optional[str] = None
+    
+    # Validator signature
+    validator_signature: Optional[str] = None
+    
+    # Protocol version
+    protocol_version: str = "1.0"
+    
+    def deserialize(self) -> Dict[str, Any]:
+        """Deserialize the synapse for analysis."""
+        return {
+            # Request
+            "prompt_length": len(self.prompt),
+            "gen_len": self.gen_len,
+            "logits_at_step": self.logits_at_step,
+            "challenge_id": self.challenge_id,
+            "reference_model": self.reference_model,
+            
+            # Response
+            "tokens_generated": len(self.tokens) if self.tokens else 0,
+            "has_logits": self.captured_logits is not None,
+            "elapsed_sec": self.elapsed_sec,
+            "throughput": self.throughput,
+            "docker_image": self.docker_image,
+            "miner_model": self.miner_model,
+            
+            # Verification
+            "verified": self.verified,
+            "cosine_similarity": self.cosine_similarity,
+            "max_abs_diff": self.max_abs_diff,
+            "verification_reason": self.verification_reason,
+            "score": self.score,
+            
+            # Audit
+            "logits_hash": self.logits_hash,
+            "protocol_version": self.protocol_version
+        }
+    
+    def compute_logits_hash(self) -> str:
+        """Compute hash of captured logits for audit trail."""
+        if not self.captured_logits:
+            return ""
+        
+        # Convert to string representation and hash
+        logits_str = ",".join(f"{x:.6f}" for x in self.captured_logits[:100])  # First 100 for efficiency
+        return hashlib.sha256(logits_str.encode()).hexdigest()[:16]
+    
+    def validate_request(self) -> bool:
+        """Validate that the request is properly formed."""
+        if not self.prompt or len(self.prompt) == 0:
+            return False
+        if self.gen_len <= 0:
+            return False
+        if self.logits_at_step <= 0 or self.logits_at_step > self.gen_len:
+            return False
+        return True
+    
+    def validate_response(self) -> bool:
+        """Validate that the response is properly formed."""
+        if not self.tokens or len(self.tokens) == 0:
+            return False
+        if self.captured_logits is None or len(self.captured_logits) == 0:
+            return False
+        if self.elapsed_sec is None or self.elapsed_sec <= 0:
+            return False
+        return True
+    
+    def calculate_throughput(self) -> float:
+        """Calculate throughput in tokens per second."""
+        if self.tokens and self.elapsed_sec and self.elapsed_sec > 0:
+            self.throughput = len(self.tokens) / self.elapsed_sec
+            return self.throughput
+        return 0.0
+    
+    def set_verification_result(
+        self,
+        verified: bool,
+        cosine_sim: float = None,
+        max_diff: float = None,
+        reason: str = None
+    ):
+        """Set verification result fields."""
+        self.verified = verified
+        self.cosine_similarity = cosine_sim
+        self.max_abs_diff = max_diff
+        self.verification_reason = reason
+        
+        # Calculate score
+        if verified and self.throughput and self.throughput > 0:
+            self.score = 1.0 / self.throughput
+        else:
+            self.score = float("inf")
+        
+        # Compute logits hash for audit
+        self.logits_hash = self.compute_logits_hash()
+
+
+@dataclass
+class CommitRevealData:
+    """
+    Data structure for commit-reveal mechanism.
+    
+    Miners submit Docker images using commit-reveal to prevent validators
+    from copying miner code before evaluation.
+    
+    Timeline:
+    1. Miner commits hash of Docker image
+    2. Wait BLOCKS_UNTIL_REVEAL blocks (~20 minutes)
+    3. Docker image is automatically revealed
+    4. Validators can now evaluate the container
+    """
+    
+    # Miner hotkey
+    hotkey: str
+    
+    # Docker image name (e.g., "user/quasar-miner:v1")
+    docker_image: str
+    
+    # Block at which commitment was made
+    commit_block: int
+    
+    # Block at which reveal occurs
+    reveal_block: int
+    
+    # Commitment hash (SHA256 of salt + docker_image)
+    commitment_hash: Optional[str] = None
+    
+    # Salt used for commitment (revealed after reveal_block)
+    salt: Optional[bytes] = None
+    
+    # Whether the commitment has been revealed
+    is_revealed: bool = False
+    
+    # Timestamp of commitment
+    commit_timestamp: Optional[float] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "hotkey": self.hotkey,
+            "docker_image": self.docker_image,
+            "commit_block": self.commit_block,
+            "reveal_block": self.reveal_block,
+            "commitment_hash": self.commitment_hash,
+            "is_revealed": self.is_revealed,
+            "commit_timestamp": self.commit_timestamp
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'CommitRevealData':
+        """Create from dictionary."""
+        return cls(
+            hotkey=data["hotkey"],
+            docker_image=data["docker_image"],
+            commit_block=data["commit_block"],
+            reveal_block=data["reveal_block"],
+            commitment_hash=data.get("commitment_hash"),
+            is_revealed=data.get("is_revealed", False),
+            commit_timestamp=data.get("commit_timestamp")
+        )
+    
+    def compute_commitment_hash(self) -> str:
+        """Compute commitment hash."""
+        if self.salt is None:
+            import os
+            self.salt = os.urandom(32)
+        
+        content = self.salt + self.docker_image.encode()
+        self.commitment_hash = hashlib.sha256(content).hexdigest()
+        return self.commitment_hash
+    
+    def verify_reveal(self, revealed_image: str, revealed_salt: bytes) -> bool:
+        """Verify that the revealed data matches the commitment."""
+        content = revealed_salt + revealed_image.encode()
+        expected_hash = hashlib.sha256(content).hexdigest()
+        return expected_hash == self.commitment_hash
