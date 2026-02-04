@@ -621,8 +621,9 @@ def commit_submission(
             .first()
         )
         
+        from datetime import timedelta  # Import here to ensure availability
+        
         if not current_round:
-            from datetime import timedelta
             current_round = models.CompetitionRound(
                 round_number=1,
                 start_time=datetime.utcnow(),
