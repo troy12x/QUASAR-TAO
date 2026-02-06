@@ -1,0 +1,14 @@
+# Miner inference server files
+exports_files([
+    "inference_server.py",
+    "requirements.inference.txt",
+])
+
+filegroup(
+    name = "inference_files",
+    srcs = [
+        "inference_server.py",
+        "requirements.inference.txt",
+    ],
+    visibility = ["//visibility:public"],
+)

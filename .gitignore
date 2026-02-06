@@ -164,14 +164,36 @@ testing/
 # Editors
 .vscode/settings.json
 
-# .sh files
-*.sh
-
 # .env files
 .env
 
+# sh files
+*.sh
 # .md files
 *.md
 
 # .db files
 *.db
+
+# docker
+docker-compose.override.yml
+*.tar
+*.tar.gz
+*.img
+
+# Miner inference image tarball (from docker-build)
+docker-build/quasar_miner_tarball.tar
+
+# Auto-generated Docker config (from .env)
+docker-build/docker_config.bzl
+
+# -----------------------------------------------------------------------------
+# Bazel
+# -----------------------------------------------------------------------------
+
+# Top-level Bazel output directories
+/bazel-*
+
+# Bazel output under docker-build (if invoked from that workspace)
+docker-build/bazel-*
+
