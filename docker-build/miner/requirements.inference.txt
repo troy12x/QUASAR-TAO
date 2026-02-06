@@ -1,0 +1,14 @@
+# Requirements for QUASAR Miner Inference Server
+# This is the minimal set of dependencies needed to run the inference server
+
+# FastAPI and server
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+pydantic>=2.0.0
+
+# PyTorch and ML
+torch>=2.0.0
+transformers>=4.35.0
+
+# Utilities
+numpy>=1.24.0
