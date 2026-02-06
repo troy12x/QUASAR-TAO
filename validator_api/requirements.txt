@@ -4,6 +4,7 @@ sqlalchemy
 pydantic
 requests
 bittensor
+python-dotenv
 # Add any specific benchmark parsers if loaded by API
 rouge
 jieba

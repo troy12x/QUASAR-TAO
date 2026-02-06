@@ -1,0 +1,51 @@
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_push", "oci_tarball")
+load(":docker_config.bzl", "DOCKER_USERNAME")
+
+# Package the miner inference server files
+genrule(
+    name = "miner_files_tar",
+    srcs = [
+        "//miner:inference_server.py",
+        "//miner:requirements.inference.txt",
+    ],
+    outs = ["miner_files.tar"],
+    cmd = """
+        mkdir -p app
+        cp $(location //miner:inference_server.py) app/inference_server.py
+        cp $(location //miner:requirements.inference.txt) app/requirements.txt
+        tar -cf $@ app
+        rm -rf app
+    """,
+)
+
+# Build the miner inference image
+oci_image(
+    name = "quasar_miner_image",
+    base = "@python_base",
+    tars = [":miner_files_tar"],
+    env = {
+        "PYTHONUNBUFFERED": "1",
+        "MODEL_NAME": "Qwen/Qwen2.5-0.5B-Instruct",
+        "DEVICE": "cuda",
+        "HOST": "0.0.0.0",
+        "PORT": "8000",
+    },
+    entrypoint = ["/bin/sh", "-c", "pip install -r /app/requirements.txt && python /app/inference_server.py"],
+    workdir = "/app",
+)
+
+# Push to Docker Hub (DOCKER_USERNAME from .env via docker_config.bzl)
+# Run: ./load_config_from_env.sh before push, or use ./push_miner.sh
+oci_push(
+    name = "push_miner_image",
+    image = ":quasar_miner_image",
+    repository = "index.docker.io/" + DOCKER_USERNAME + "/quasar-miner",
+    remote_tags = ["latest"],
+)
+
+# Create local tarball for testing
+oci_tarball(
+    name = "quasar_miner_tarball",
+    image = ":quasar_miner_image",
+    repo_tags = ["quasar-miner:latest"],
+)

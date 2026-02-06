@@ -19,7 +19,18 @@ def test_quasar_basic():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     
-    # Model parameters
+    # Clear GPU memory before test
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        free_mem_start = torch.cuda.mem_get_info()[0] / 1024**3
+        print(f"GPU memory before test: {free_mem_start:.2f} GB free")
+    else:
+        free_mem_start = None
+    
+    # Model parameters - start conservative
     batch_size = 2
     seq_len = 100000
     hidden_size = 512
@@ -35,17 +46,119 @@ def test_quasar_basic():
         use_short_conv=True,
     ).to(device)
     
+    # Check memory again after model initialization and before creating input
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+        torch.cuda.empty_cache()
+        free_mem_before_input = torch.cuda.mem_get_info()[0] / 1024**3
+        print(f"GPU memory after model init: {free_mem_before_input:.2f} GB free")
+        
+        # Dynamically adjust parameters based on available memory
+        # Be very conservative - need at least 2GB free for computation
+        if free_mem_before_input < 1.0:
+            seq_len = 20000
+            batch_size = 1
+            print(f"Very low GPU memory ({free_mem_before_input:.2f} GB), using seq_len={seq_len}, batch_size={batch_size}")
+        elif free_mem_before_input < 2.0:
+            seq_len = 50000
+            batch_size = 1
+            print(f"Low GPU memory ({free_mem_before_input:.2f} GB), using seq_len={seq_len}, batch_size={batch_size}")
+        elif free_mem_before_input < 4.0:
+            seq_len = 50000
+            batch_size = 2
+            print(f"Moderate GPU memory ({free_mem_before_input:.2f} GB), using seq_len={seq_len}, batch_size={batch_size}")
+        else:
+            seq_len = 100000
+            batch_size = 2
+            print(f"Sufficient GPU memory ({free_mem_before_input:.2f} GB), using seq_len={seq_len}, batch_size={batch_size}")
+    
     # Create input
     x = torch.randn(batch_size, seq_len, hidden_size, device=device)
     
-    # Forward pass
+    # Forward pass with retry logic for OOM
     print(f"Input shape: {x.shape}")
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
-        output, _, _ = quasar(x)
+    max_retries = 3
+    retry_count = 0
     
-    print(f"Output shape: {output.shape}")
-    print("QuasarAttention basic test PASSED!")
-    return True
+    while retry_count < max_retries:
+        try:
+            # Final memory check right before forward pass
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                free_mem_final = torch.cuda.mem_get_info()[0] / 1024**3
+                print(f"GPU memory before forward pass: {free_mem_final:.2f} GB free")
+                
+                # More aggressive check - need at least 1GB for safe operation
+                if free_mem_final < 1.0:
+                    if retry_count == 0:
+                        # First retry: reduce batch size
+                        print(f"Low memory ({free_mem_final:.2f} GB), reducing batch_size from {batch_size} to 1")
+                        batch_size = 1
+                        del x
+                        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+                        retry_count += 1
+                        continue
+                    elif retry_count == 1:
+                        # Second retry: reduce sequence length
+                        seq_len = max(seq_len // 2, 20000)
+                        print(f"Still low memory ({free_mem_final:.2f} GB), reducing seq_len to {seq_len}")
+                        del x
+                        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+                        retry_count += 1
+                        continue
+                    else:
+                        raise RuntimeError(f"Insufficient GPU memory for forward pass: {free_mem_final:.2f} GB free (tried reducing parameters)")
+            
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else torch.no_grad():
+                output, _, _ = quasar(x)
+            
+            # Success - break out of retry loop
+            break
+        
+            print(f"Output shape: {output.shape}")
+            print("QuasarAttention basic test PASSED!")
+            
+            # Cleanup after test
+            del output, x, quasar
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+            
+            return True
+            
+        except torch.cuda.OutOfMemoryError as e:
+            retry_count += 1
+            print(f"CUDA OOM Error (attempt {retry_count}/{max_retries}): {e}")
+            
+            # Cleanup on error
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+            
+            if retry_count >= max_retries:
+                print(f"Failed after {max_retries} retries with reduced parameters")
+                raise
+            
+            # Retry with reduced parameters
+            if retry_count == 1:
+                # First retry: reduce batch size
+                print("Retrying with batch_size=1...")
+                batch_size = 1
+                del x
+                x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+            elif retry_count == 2:
+                # Second retry: reduce sequence length
+                seq_len = max(seq_len // 2, 20000)
+                print(f"Retrying with seq_len={seq_len}...")
+                del x
+                x = torch.randn(batch_size, seq_len, hidden_size, device=device)
 
 def test_quasar_prefill_benchmark():
     print("\n" + "="*60)
@@ -110,12 +223,57 @@ def test_quasar_stacked_benchmark():
     print(f"Device: {device}")
 
     # Match the 1B-ish QuasarRoPE benchmark configuration
-    batch_size = 1
-    hidden_size = 2048
-    num_heads = 16
+    # Dynamically adjust based on available GPU memory
+    if torch.cuda.is_available():
+        free_mem = torch.cuda.mem_get_info()[0] / 1024**3
+        print(f"GPU memory before stacked test: {free_mem:.2f} GB free")
+        
+        # Adjust parameters based on available memory - be conservative to avoid OOM
+        if free_mem < 5.0:
+            batch_size = 1
+            hidden_size = 512
+            num_heads = 4
+            n_layers = 8
+            seq_lens = [20000]
+            print(f"Very low memory ({free_mem:.2f} GB), using minimal config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
+        elif free_mem < 10.0:
+            batch_size = 1
+            hidden_size = 1024
+            num_heads = 8
+            n_layers = 12
+            seq_lens = [50000]
+            print(f"Low memory ({free_mem:.2f} GB), using reduced config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
+        elif free_mem < 20.0:
+            batch_size = 1
+            hidden_size = 1536
+            num_heads = 12
+            n_layers = 16
+            seq_lens = [75000]
+            print(f"Moderate memory ({free_mem:.2f} GB), using medium config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
+        elif free_mem < 40.0:
+            # 20–40 GB: use medium config to avoid OOM (full config can OOM at ~38 GB)
+            batch_size = 1
+            hidden_size = 1536
+            num_heads = 12
+            n_layers = 16
+            seq_lens = [75000]
+            print(f"Memory {free_mem:.2f} GB (avoiding full config), using medium: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
+        else:
+            batch_size = 1
+            hidden_size = 2048
+            num_heads = 16
+            n_layers = 24
+            seq_lens = [100000]
+            print(f"Sufficient memory ({free_mem:.2f} GB), using full config: hidden_size={hidden_size}, n_layers={n_layers}, seq_len={seq_lens[0]}")
+    else:
+        # CPU fallback
+        batch_size = 1
+        hidden_size = 1024
+        num_heads = 8
+        n_layers = 12
+        seq_lens = [20000]
+    
     head_dim = hidden_size // num_heads
-    n_layers = 24
-    seq_lens = [100000]
 
     # Build a stack of attention layers (attention-only, no FFN/LN/head)
     layers = torch.nn.ModuleList([

@@ -1,0 +1,17 @@
+# Expose miner files for Docker build
+exports_files([
+    "inference_server.py",
+    "requirements.inference.txt",
+    "server.py",
+    "Dockerfile",
+    "Dockerfile.inference",
+])
+
+filegroup(
+    name = "inference_files",
+    srcs = [
+        "inference_server.py",
+        "requirements.inference.txt",
+    ],
+    visibility = ["//visibility:public"],
+)

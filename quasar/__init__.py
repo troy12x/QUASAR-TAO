@@ -32,4 +32,26 @@ from . import protocol
 from . import base
 from . import validator
 from . import api
+from . import inference_verification
 from .subnet_links import SUBNET_LINKS
+
+# Export inference verification components
+from .inference_verification import (
+    CONFIG as INFERENCE_CONFIG,
+    InferenceVerificationConfig,
+    ReferenceModel,
+    MinerEvaluation,
+    VerificationResult,
+    verify_logits,
+    evaluate_miner,
+    select_leader,
+    calculate_weights,
+    generate_random_prompt,
+    generate_verification_challenge,
+)
+
+# Export protocol components
+from .protocol import (
+    InferenceVerificationSynapse,
+    CommitRevealData,
+)

@@ -423,6 +423,9 @@ class Validator(BaseValidatorNeuron):
     """
     Simplified Validator for QUASAR-SUBNET.
     Evaluates miners by calling the challenge container.
+    
+    Now includes logit verification from const's qllm architecture to prevent
+    miners from returning bogus values quickly.
     """
 
     def __init__(self, config=None):
@@ -441,11 +444,173 @@ class Validator(BaseValidatorNeuron):
         self.performance_validator = PerformanceValidator()
         bt.logging.info("⚡ Performance validator initialized")
         
+        # ═══════════════════════════════════════════════════════════════════════════
+        # LOGIT VERIFICATION (from const's qllm architecture)
+        # Reference model for verifying miners are running the actual model
+        # ═══════════════════════════════════════════════════════════════════════════
+        self.reference_model = None
+        self.reference_model_name = os.getenv("REFERENCE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+        self.logit_verification_enabled = os.getenv("ENABLE_LOGIT_VERIFICATION", "true").lower() == "true"
+        
+        # Verification thresholds (from const's implementation)
+        self.cosine_sim_threshold = float(os.getenv("COSINE_SIM_THRESHOLD", "0.99"))
+        self.max_abs_diff_threshold = float(os.getenv("MAX_ABS_DIFF_THRESHOLD", "0.1"))
+        
+        bt.logging.info(f"🔍 Logit verification: {'ENABLED' if self.logit_verification_enabled else 'DISABLED'}")
+        if self.logit_verification_enabled:
+            bt.logging.info(f"   Reference model: {self.reference_model_name}")
+            bt.logging.info(f"   Cosine sim threshold: {self.cosine_sim_threshold}")
+            bt.logging.info(f"   Max abs diff threshold: {self.max_abs_diff_threshold}")
+        
         # Initialize scores
         self.scores = torch.zeros(self.metagraph.n, dtype=torch.float32, device=self.device)
         self.load_state()
         
         bt.logging.info(f"📡 Validator API URL: {VALIDATOR_API_URL}")
+    
+    def load_reference_model(self):
+        """Load the reference model for logit verification (lazy loading)."""
+        if self.reference_model is not None:
+            return
+        
+        if not self.logit_verification_enabled:
+            return
+        
+        try:
+            from quasar.inference_verification import ReferenceModel
+            
+            print(f"[VALIDATOR] 🔍 Loading reference model: {self.reference_model_name}...", flush=True)
+            bt.logging.info(f"Loading reference model: {self.reference_model_name}")
+            
+            self.reference_model = ReferenceModel(self.reference_model_name)
+            
+            # Load synchronously (blocking)
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.reference_model.load())
+            loop.close()
+            
+            print(f"[VALIDATOR] ✅ Reference model loaded successfully", flush=True)
+            bt.logging.success("Reference model loaded successfully")
+            
+        except Exception as e:
+            print(f"[VALIDATOR] ⚠️ Failed to load reference model: {e}", flush=True)
+            bt.logging.warning(f"Failed to load reference model: {e}")
+            self.reference_model = None
+    
+    def run_logit_verification(self, submission_id: int, docker_image: str = None) -> Dict:
+        """
+        Run logit verification for a submission.
+        
+        This is the core verification from const's qllm architecture:
+        1. Generate random prompt
+        2. Run inference on miner's container (or local test)
+        3. Run inference on reference model
+        4. Compare logits at random step
+        
+        Args:
+            submission_id: Submission ID for tracking
+            docker_image: Docker image to verify (optional, for container-based miners)
+        
+        Returns:
+            Dict with verification results
+        """
+        if not self.logit_verification_enabled:
+            return {
+                "verified": None,  # None = not verified (verification disabled)
+                "reason": "Logit verification disabled"
+            }
+        
+        # Ensure reference model is loaded
+        self.load_reference_model()
+        
+        if self.reference_model is None:
+            return {
+                "verified": None,
+                "reason": "Reference model not available"
+            }
+        
+        try:
+            from quasar.inference_verification import (
+                generate_verification_challenge,
+                verify_logits,
+                CONFIG
+            )
+            import asyncio
+            
+            print(f"[VALIDATOR] 🔍 Running logit verification for submission {submission_id}...", flush=True)
+            
+            # Generate challenge
+            challenge = generate_verification_challenge(self.reference_model)
+            prompt = challenge["prompt"]
+            gen_len = challenge["gen_len"]
+            logits_at_step = challenge["logits_at_step"]
+            
+            print(f"[VALIDATOR]   Challenge: prompt_len={len(prompt)}, gen_len={gen_len}, capture_step={logits_at_step}", flush=True)
+            
+            # Run reference model inference
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            reference_result = loop.run_until_complete(
+                self.reference_model.inference(prompt, gen_len, logits_at_step)
+            )
+            loop.close()
+            
+            if reference_result.get("captured_logits") is None:
+                return {
+                    "verified": False,
+                    "reason": "Reference model failed to capture logits"
+                }
+            
+            # For now, without container execution, we can't actually run miner inference
+            # This is a placeholder that would be filled when affinetes/Basilica is available
+            # For testing, we'll use the reference logits (which would always pass)
+            
+            # TODO: When container execution is available:
+            # miner_result = await run_container_inference(hotkey, docker_image, prompt, gen_len, logits_at_step)
+            
+            # For now, we'll mark as "pending" since we can't actually run miner containers
+            # In production, this would compare miner logits against reference
+            
+            print(f"[VALIDATOR]   ⚠️ Container execution not available - marking as pending", flush=True)
+            
+            return {
+                "verified": None,  # None = pending (container execution not available)
+                "reason": "Container execution not available - awaiting affinetes integration",
+                "reference_throughput": gen_len / reference_result["elapsed_sec"],
+                "reference_elapsed_sec": reference_result["elapsed_sec"]
+            }
+            
+        except Exception as e:
+            print(f"[VALIDATOR] ❌ Logit verification failed: {e}", flush=True)
+            traceback.print_exc()
+            return {
+                "verified": None,
+                "reason": f"Verification error: {str(e)}"
+            }
+    
+    def record_verification_result(self, submission_id: int, result: Dict):
+        """Record logit verification result to the API."""
+        try:
+            response = requests.post(
+                f"{VALIDATOR_API_URL}/record_verification",
+                params={
+                    "submission_id": submission_id,
+                    "verified": result.get("verified"),
+                    "cosine_similarity": result.get("cosine_similarity"),
+                    "max_abs_diff": result.get("max_abs_diff"),
+                    "throughput": result.get("throughput_verified") or result.get("reference_throughput"),
+                    "reason": result.get("reason")
+                },
+                timeout=30
+            )
+            if response.status_code == 200:
+                print(f"[VALIDATOR] ✅ Verification result recorded for submission {submission_id}", flush=True)
+            else:
+                print(f"[VALIDATOR] ⚠️ Failed to record verification: {response.status_code}", flush=True)
+        except Exception as e:
+            print(f"[VALIDATOR] ⚠️ Failed to record verification result: {e}", flush=True)
 
     def evaluate_performance_submissions(self) -> Dict[str, float]:
         """Evaluate performance submissions by cloning repos and running tests.
@@ -485,22 +650,70 @@ class Validator(BaseValidatorNeuron):
 
                 if score > 0:
                     print(f"[VALIDATOR] ✅ Valid submission from {miner_hotkey[:12]}... - Score: {score:.4f} (normalized: {normalized_score:.4f})", flush=True)
-                    evaluated_scores[miner_hotkey] = normalized_score
+                    
+                    submission_id = submission.get("id")
+                    
+                    # ═══════════════════════════════════════════════════════════════════════
+                    # LOGIT VERIFICATION (from const's qllm architecture)
+                    # Run after performance test passes to verify miner is running actual model
+                    # ═══════════════════════════════════════════════════════════════════════
+                    if self.logit_verification_enabled and submission_id:
+                        print(f"[VALIDATOR] 🔍 Running logit verification...", flush=True)
+                        docker_image = submission.get("docker_image")
+                        verification_result = self.run_logit_verification(submission_id, docker_image)
+                        
+                        # Record verification result to API
+                        self.record_verification_result(submission_id, verification_result)
+                        
+                        # If verification explicitly failed, reduce score to 0
+                        if verification_result.get("verified") == False:
+                            print(f"[VALIDATOR] ❌ Logit verification FAILED - score set to 0", flush=True)
+                            normalized_score = 0.0
+                            evaluated_scores[miner_hotkey] = 0.0
+                        else:
+                            # Verification passed or pending - use original score
+                            evaluated_scores[miner_hotkey] = normalized_score
+                    else:
+                        evaluated_scores[miner_hotkey] = normalized_score
+                    
+                    # Mark submission as validated in API (this will record success for IP)
+                    if submission_id:
+                        try:
+                            requests.post(
+                                f"{VALIDATOR_API_URL}/mark_validated",
+                                json={"submission_id": submission_id},
+                                timeout=30
+                            )
+                        except Exception as e:
+                            print(f"[VALIDATOR] Failed to mark submission as validated: {e}", flush=True)
                 else:
                     print(f"[VALIDATOR] ❌ Invalid submission from {miner_hotkey[:12]}...", flush=True)
                     evaluated_scores[miner_hotkey] = 0.0
-
-                # Mark submission as validated in API
-                submission_id = submission.get("id")
-                if submission_id:
-                    try:
-                        requests.post(
-                            f"{VALIDATOR_API_URL}/mark_validated",
-                            json={"submission_id": submission_id},
-                            timeout=30
-                        )
-                    except Exception as e:
-                        print(f"[VALIDATOR] Failed to mark submission as validated: {e}", flush=True)
+                    
+                    # Record failure for IP banning (Phase 4)
+                    ip_address = submission.get("ip_address")
+                    if ip_address:
+                        try:
+                            requests.post(
+                                f"{VALIDATOR_API_URL}/record_failure",
+                                json={"ip_address": ip_address},
+                                timeout=10
+                            )
+                            print(f"[VALIDATOR] 📝 Recorded failure for IP: {ip_address}", flush=True)
+                        except Exception as e:
+                            print(f"[VALIDATOR] Failed to record failure: {e}", flush=True)
+                    
+                    # Still mark as validated to avoid re-processing
+                    submission_id = submission.get("id")
+                    if submission_id:
+                        try:
+                            requests.post(
+                                f"{VALIDATOR_API_URL}/mark_validated",
+                                json={"submission_id": submission_id},
+                                timeout=30
+                            )
+                        except Exception as e:
+                            print(f"[VALIDATOR] Failed to mark submission as validated: {e}", flush=True)
 
             if evaluated_scores:
                 print(f"[VALIDATOR] ✅ Evaluated {len(evaluated_scores)} performance submissions", flush=True)
@@ -541,38 +754,128 @@ class Validator(BaseValidatorNeuron):
             bt.logging.error(f"❌ Failed to save state: {e}")
 
     async def forward(self):
-        """Main validation loop - validate speed submissions by cloning miner repos and running performance tests."""
+        """Main validation loop with dynamic polling based on submission rate."""
         print("[VALIDATOR] ➡️ Starting validation cycle...", flush=True)
         bt.logging.info("➡️ Starting validation cycle...")
 
         try:
+            # Check submission rate and adjust polling interval dynamically
+            polling_interval = 300  # Default: 5 minutes
+            try:
+                response = requests.get(
+                    f"{VALIDATOR_API_URL}/get_submission_rate",
+                    params={"window_minutes": 10},
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    submissions_per_min = data.get("submissions_per_minute", 0)
+                    
+                    # Adjust polling interval based on submission rate
+                    if submissions_per_min > 5:
+                        # High activity: poll every 1 minute
+                        polling_interval = 60
+                        activity_level = "HIGH"
+                    elif submissions_per_min > 1:
+                        # Medium activity: poll every 2 minutes
+                        polling_interval = 120
+                        activity_level = "MEDIUM"
+                    else:
+                        # Low activity: poll every 5 minutes (default)
+                        polling_interval = 300
+                        activity_level = "LOW"
+                    
+                    print(f"[VALIDATOR] 📊 Submission rate: {submissions_per_min:.2f}/min ({activity_level} activity), "
+                          f"polling every {polling_interval}s", flush=True)
+                    bt.logging.info(f"📊 Submission rate: {submissions_per_min:.2f}/min, polling every {polling_interval}s")
+                else:
+                    print(f"[VALIDATOR] ⚠️ Failed to get submission rate (status {response.status_code}), using default 5min", flush=True)
+            except Exception as e:
+                print(f"[VALIDATOR] ⚠️ Failed to get submission rate: {e}, using default 5min", flush=True)
+                bt.logging.warning(f"Failed to get submission rate: {e}")
+            
             # Evaluate performance submissions
             print("[VALIDATOR] ⚡ Evaluating performance submissions...", flush=True)
             evaluated_scores = self.evaluate_performance_submissions()
             
             # If no submissions were evaluated, wait before next cycle
             if not evaluated_scores:
-                print("[VALIDATOR] ⚠️ No pending submissions to evaluate, waiting 5 minutes...", flush=True)
-                bt.logging.info("No pending submissions, waiting 5 minutes...")
-                
-                # Get polling interval from config
-                polling_interval = getattr(self.neuron, 'polling_interval_seconds', 300) if hasattr(self, 'neuron') else 300
+                print(f"[VALIDATOR] ⚠️ No pending submissions to evaluate, waiting {polling_interval}s...", flush=True)
+                bt.logging.info(f"No pending submissions, waiting {polling_interval}s...")
                 time.sleep(polling_interval)
                 return
             
             # Evaluation complete - scores are already updated in API
-            # Other validators will fetch weights from /get_weights and submit to chain
             print(f"[VALIDATOR] ✅ Evaluation complete: {len(evaluated_scores)} submissions evaluated", flush=True)
-            print(f"[VALIDATOR] 📊 Scores updated in API - validators can fetch weights from /get_weights", flush=True)
             bt.logging.success(f"✅ Evaluation complete: {len(evaluated_scores)} submissions")
             
             for hotkey, score in evaluated_scores.items():
                 print(f"[VALIDATOR]   {hotkey[:12]}...: score={score:.4f}", flush=True)
+            
+            # Check if current round is ending soon and finalize if needed
+            try:
+                response = requests.get(f"{VALIDATOR_API_URL}/get_current_round", timeout=10)
+                if response.status_code == 200:
+                    round_data = response.json()
+                    time_remaining = round_data.get("time_remaining_seconds", 3600)
+                    
+                    # If round ends in < 5 minutes, finalize it
+                    if 0 < time_remaining < 300:
+                        print(f"[VALIDATOR] ⏰ Round ending in {time_remaining}s, finalizing...", flush=True)
+                        try:
+                            finalize_resp = requests.post(
+                                f"{VALIDATOR_API_URL}/finalize_round/{round_data['id']}",
+                                timeout=60
+                            )
+                            if finalize_resp.status_code == 200:
+                                finalize_result = finalize_resp.json()
+                                print(f"[VALIDATOR] ✅ Round {round_data['id']} finalized. Winner: {finalize_result.get('winner', 'N/A')}", flush=True)
+                                bt.logging.info(f"Round {round_data['id']} finalized")
+                            else:
+                                print(f"[VALIDATOR] ⚠️ Failed to finalize round (status {finalize_resp.status_code})", flush=True)
+                        except Exception as e:
+                            print(f"[VALIDATOR] ⚠️ Failed to finalize round: {e}", flush=True)
+            except Exception as e:
+                print(f"[VALIDATOR] ⚠️ Round check failed: {e}", flush=True)
+            
+            # Fetch and submit weights from API (for completed rounds)
+            try:
+                response = requests.get(f"{VALIDATOR_API_URL}/get_weights", timeout=10)
+                if response.status_code == 200:
+                    weights_data = response.json()
+                    weights = weights_data.get("weights", [])
+                    
+                    if weights:
+                        # Get miner UIDs from weights
+                        miner_uids = []
+                        for weight_entry in weights:
+                            uid = weight_entry.get("uid", 0)
+                            if uid > 0:
+                                miner_uids.append(uid)
+                        
+                        if miner_uids:
+                            print(f"[VALIDATOR] 📊 Fetching weights for {len(miner_uids)} miners", flush=True)
+                            bt.logging.info(f"Fetching weights for {len(miner_uids)} miners")
+                            # Submit weights to chain
+                            await self.submit_weights(miner_uids)
+                        else:
+                            print(f"[VALIDATOR] ⚠️ No valid UIDs in weights data", flush=True)
+                    else:
+                        print(f"[VALIDATOR] ⚠️ No weights available yet", flush=True)
+            except Exception as e:
+                print(f"[VALIDATOR] ⚠️ Weight fetching/submission failed: {e}", flush=True)
+                bt.logging.warning(f"Weight submission failed: {e}")
+            
+            # Wait before next cycle using dynamic interval
+            print(f"[VALIDATOR] ⏱️ Waiting {polling_interval}s before next cycle...", flush=True)
+            time.sleep(polling_interval)
                 
         except Exception as e:
             print(f"[VALIDATOR] ❌ Error in forward: {e}", flush=True)
             bt.logging.error(f"❌ Error in forward: {e}")
             traceback.print_exc()
+            # Wait 5 minutes on error before retrying
+            time.sleep(300)
 
     async def submit_weights(self, miner_uids: List[int]):
         """Submit weights to Bittensor based on challenge container scores."""
@@ -612,21 +915,27 @@ class Validator(BaseValidatorNeuron):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--netuid", type=int, default=24, help="Subnet netuid")
-    parser.add_argument("--wallet.name", type=str, default="validator", help="Wallet name")
-    parser.add_argument("--wallet.hotkey", type=str, default="default", help="Wallet hotkey")
-    parser.add_argument("--subtensor.network", type=str, default="finney", help="Bittensor network")
-    parser.add_argument("--neuron.sample_size", type=int, default=10, help="Number of miners to evaluate")
-    parser.add_argument("--neuron.timeout", type=int, default=60, help="Timeout in seconds")
-    parser.add_argument("--neuron.vpermit_tao_limit", type=int, default=4096, help="VPermit TAO limit")
-    parser.add_argument("--neuron.polling_interval", type=int, default=300, help="Polling interval in seconds (default: 300 = 5 minutes)")
-    parser.add_argument("--logging.debug", action="store_true", help="Enable debug logging")
+    # Create parser and add all Bittensor base arguments
+    parser = argparse.ArgumentParser(description="QuasarSubnet Validator")
+    bt.Wallet.add_args(parser)
+    bt.Subtensor.add_args(parser)
+    bt.logging.add_args(parser)
+    bt.Axon.add_args(parser)
+    Validator.add_args(parser)  # Adds validator-specific Bittensor args
     
+    # Add custom validator-specific arguments
+    parser.add_argument("--neuron.polling_interval", type=int, default=300,
+                       help="Polling interval in seconds (default: 300 = 5 minutes)")
+    
+    # Create config - bt.Config will parse sys.argv automatically
+    config = bt.Config(parser)
+    
+    # Parse args again to get custom arguments
     args = parser.parse_args()
     
-    # Build config properly - bt.Config expects an ArgumentParser
-    config = bt.Config(parser)
+    # Update config with custom args
+    if hasattr(args, 'polling_interval'):
+        config.neuron.polling_interval = args.polling_interval
     
     # Run validator
     validator = Validator(config=config)

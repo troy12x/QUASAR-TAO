@@ -1,0 +1,57 @@
+# QUASAR Miner Inference Container
+# 
+# This Dockerfile creates a container that implements the inference
+# interface required by the QUASAR inference verification subnet.
+#
+# Build:
+#   docker build -f Dockerfile.inference -t quasar-miner:latest .
+#
+# Run:
+#   docker run -p 8000:8000 --gpus all quasar-miner:latest
+#
+# The container exposes:
+#   POST /inference - Run inference with logit capture
+#   GET /health    - Health check
+#   GET /model_info - Model information
+
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create working directory
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements.inference.txt requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy inference server
+COPY inference_server.py .
+
+# Environment variables for configuration
+# Override MODEL_NAME to use your optimized model
+ENV MODEL_NAME="Qwen/Qwen2.5-0.5B-Instruct"
+ENV DEVICE="cuda"
+ENV HOST="0.0.0.0"
+ENV PORT=8000
+
+# Expose the inference port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the inference server
+CMD ["python3", "inference_server.py"]
