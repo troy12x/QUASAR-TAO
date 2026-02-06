@@ -155,7 +155,7 @@ docker run -d \
   --name quasar-miner-inference \
   --gpus all \
   -p 8001:8000 \
-  vantascript/quasar-miner:latest
+  dockerhub_username/quasar-miner:latest
 ```
 
 ---
@@ -194,7 +194,7 @@ WALLET_VALIDATOR_NAME=quasar_validator
 WALLET_HOTKEY=default
 ```
 
-### Local: Run Full Stack
+### Local: Run 
 
 Use separate terminals:
 
@@ -249,15 +249,6 @@ python miner/inference_server.py
 
 ---
 
-## Documentation
-
-- **[Quick Start](docs/QUICK_START.md)**: Fast setup guide (5 minutes)
-- **[User Guide](docs/USER_GUIDE.md)**: Complete guide for miners and validators (direct commands, no shell scripts)
-- **[Technical Support](docs/TECHNICAL_SUPPORT.md)**: Troubleshooting guide for common issues
-- **[Testing Guide](docs/TESTING_GUIDE.md)**: Detailed testing scenarios for local and production
-
----
-
 ## Docker & Image Publishing
 
 The miner inference container is defined using **rules_oci** in `docker-build/BUILD.bazel`.
@@ -309,7 +300,7 @@ Defined in `.env`:
 | `DATABASE_URL`          | `postgresql://...` or `sqlite:///...`        | Validator API           |
 | `VALIDATOR_API_URL`     | `http://localhost:8000`                       | Miners, Validators      |
 | `GITHUB_TOKEN`          | `ghp_...`                                     | Miner                   |
-| `GITHUB_USERNAME`       | `VantaScript`                                 | Miner                   |
+| `GITHUB_USERNAME`       | `gh_username`                                 | Miner                   |
 | `GITHUB_FORK_NAME`      | `flash-linear-attention`                      | Miner                   |
 | `TARGET_SEQUENCE_LENGTH`| `100000`                                      | Miner                   |
 | `AGENT_ITERATIONS`      | `100`                                         | Miner                   |
@@ -328,7 +319,7 @@ Defined in `.env`:
 | `MAX_ABS_DIFF_THRESHOLD`| `0.1`                                         | Validator neuron        |
 | `BLOCKS_UNTIL_REVEAL`   | `100`                                         | Commit–reveal           |
 | `BLOCK_TIME_SECONDS`    | `12`                                          | Commit–reveal           |
-| `DOCKER_USERNAME`       | `vantascript`                                 | Bazel / oci_push        |
+| `DOCKER_USERNAME`       | `dokerhub_username`                                 | Bazel / oci_push        |
 
 ---
 
