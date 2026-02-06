@@ -1,7 +1,4 @@
-#!/bin/bash
-# Script to start the Miner Inference Server (for inference verification testing)
-# Uses port 8001 by default to avoid conflict with Validator API (8000)
-# Run from project root
+
 
 cd "$(dirname "$0")"
 

@@ -9,7 +9,7 @@ if [ -f .env ]; then
     set +a
 fi
 
-DOCKER_USERNAME=${DOCKER_USERNAME:-vantascript}
+DOCKER_USERNAME=${DOCKER_USERNAME:-your_dockerhub_username}
 
 cat > docker-build/docker_config.bzl << EOF
 # Auto-generated from .env - do not edit manually
