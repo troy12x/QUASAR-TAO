@@ -167,8 +167,7 @@ testing/
 # .env files
 .env
 
-# sh files
-*.sh
+
 # .md files
 *.md
 
