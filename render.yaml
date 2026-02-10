@@ -1,5 +1,5 @@
 services:
-  # Validator API
+  # Validator API (production)
   - type: web
     name: quasar-validator-api
     runtime: docker
@@ -10,19 +10,6 @@ services:
         value: sqlite:///./quasar.db
     healthCheckPath: /health
 
-  # Miner Inference Server (CPU - for Render)
-  - type: web
-    name: quasar-miner-inference
-    runtime: docker
-    dockerfilePath: ./miner/Dockerfile.render
-    plan: free
-    envVars:
-      - key: MODEL_NAME
-        value: Qwen/Qwen2.5-0.5B-Instruct
-      - key: DEVICE
-        value: cpu
-      - key: PORT
-        value: 8000
-      - key: HOST
-        value: 0.0.0.0
-    healthCheckPath: /health
+  # NOTE:
+  # Miner inference servers are run by each miner individually
+  # (Render, Runpod, bare metal, etc.).

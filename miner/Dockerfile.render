@@ -1,37 +1,47 @@
 # Miner Inference Server for Render Deployment (CPU)
-# This is optimized for Render's CPU-only environment
+# Optimized for Render's free tier (512MB memory limit)
+# Uses CPU-only PyTorch and memory-efficient model loading
 
 FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install only essential system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Copy requirements
-COPY miner/requirements.inference.txt requirements.txt
+# Copy lightweight requirements (CPU-only PyTorch)
+# Use lightweight requirements for memory-constrained environments
+COPY miner/requirements.inference.lightweight.txt requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies with optimizations
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip cache purge
 
 # Copy inference server
 COPY miner/inference_server.py .
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct
 ENV DEVICE=cpu
 ENV HOST=0.0.0.0
 ENV PORT=8000
 
+# Memory optimization: limit Python memory
+ENV PYTHONHASHSEED=0
+ENV MALLOC_TRIM_THRESHOLD_=100000
+
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+# Health check (longer start period for model loading)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run server
-CMD ["python", "inference_server.py"]
+# Run server with memory limits
+CMD ["python", "-u", "inference_server.py"]

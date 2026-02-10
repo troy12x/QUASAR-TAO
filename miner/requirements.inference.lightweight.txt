@@ -1,0 +1,18 @@
+# Lightweight requirements for Render free tier (CPU-only, memory-optimized)
+# Use this for deployments with <512MB memory constraints
+
+# FastAPI and server (minimal)
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+pydantic>=2.0.0
+
+# CPU-only PyTorch (much smaller than full PyTorch)
+# This installs torch without CUDA support, reducing size significantly
+--index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0,<2.2.0
+
+# Transformers (required for model loading)
+transformers>=4.35.0
+
+# Utilities (minimal)
+numpy>=1.24.0

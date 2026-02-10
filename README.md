@@ -176,7 +176,19 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Copy `.env` (or edit the existing one) and fill in at least:
+**Set up environment variables**:
+
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit .env and fill in at least:
+# - GITHUB_TOKEN (required for miners)
+# - GITHUB_USERNAME (required for miners)
+# - DOCKER_USERNAME (if building Docker images)
+```
+
+Required variables for miners:
 
 ```bash
 GITHUB_TOKEN=ghp_...          # GitHub PAT with repo scope

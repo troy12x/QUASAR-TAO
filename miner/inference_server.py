@@ -70,7 +70,7 @@ tokenizer = None
 
 
 def load_model():
-    """Load the model and tokenizer."""
+    """Load the model and tokenizer with memory optimizations."""
     global model, tokenizer
     
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -78,20 +78,40 @@ def load_model():
     print(f"Loading model: {MODEL_NAME}")
     print(f"Device: {DEVICE}, dtype: {DTYPE}")
     
+    # Load tokenizer first (lightweight)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    
+    # Memory-efficient loading options for CPU
+    load_kwargs = {
+        "trust_remote_code": True,
+        "low_cpu_mem_usage": True,  # Reduces peak memory during loading
+    }
+    
+    if DEVICE == "cpu":
+        # For CPU, use float32 and no device_map
+        load_kwargs["torch_dtype"] = torch.float32
+        load_kwargs["device_map"] = None
+    else:
+        # For CUDA, use float16 and auto device_map
+        load_kwargs["torch_dtype"] = DTYPE
+        load_kwargs["device_map"] = "auto"
     
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=DTYPE,
-        device_map="auto" if DEVICE == "cuda" else None,
-        trust_remote_code=True
+        **load_kwargs
     )
     
-    if DEVICE != "cuda" or not hasattr(model, 'hf_device_map'):
+    if DEVICE == "cpu" or not hasattr(model, 'hf_device_map'):
         model = model.to(DEVICE)
     
     model.eval()
+    
+    # Enable memory-efficient attention if available
+    if hasattr(model.config, "use_cache"):
+        model.config.use_cache = True
+    
     print(f"Model loaded successfully")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
 
 @asynccontextmanager
