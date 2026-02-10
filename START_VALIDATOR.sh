@@ -27,7 +27,7 @@ fi
 
 # Set defaults if not in .env
 export VALIDATOR_API_URL=${VALIDATOR_API_URL:-"http://localhost:8000"}
-export NETUID=${NETUID:-24}
+export NETUID=${NETUID:-383}
 export SUBTENSOR_NETWORK=${SUBTENSOR_NETWORK:-"test"}
 export WALLET_VALIDATOR_NAME=${WALLET_VALIDATOR_NAME:-"quasar_validator"}
 export WALLET_HOTKEY=${WALLET_HOTKEY:-"default"}

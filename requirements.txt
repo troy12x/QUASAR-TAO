@@ -43,3 +43,8 @@ fuzzywuzzy>=0.18.0
 python-Levenshtein>=0.12.2
 datasets>=2.12.0
 math-verify>=0.1.0
+
+# Database dependencies
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.0

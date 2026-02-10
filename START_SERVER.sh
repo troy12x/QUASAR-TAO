@@ -13,6 +13,9 @@ echo ""
 if [ -d ".venv" ]; then
     source .venv/bin/activate
     echo "✅ Activated virtual environment"
+else
+    echo "❌ Virtual environment not found. Create it with: python3 -m venv .venv"
+    exit 1
 fi
 
 # Load environment variables
@@ -29,6 +32,18 @@ fi
 export HOST=${HOST:-"0.0.0.0"}
 export PORT=${PORT:-8000}
 export DATABASE_URL=${DATABASE_URL:-"sqlite:///./quasar_validator.db"}
+
+# Check for required dependencies
+echo "Checking dependencies..."
+if ! python -c "import psycopg2" 2>/dev/null; then
+    echo "⚠️  psycopg2-binary not found. Installing..."
+    pip install -q psycopg2-binary
+fi
+
+if ! python -c "import fastapi" 2>/dev/null; then
+    echo "⚠️  fastapi not found. Installing..."
+    pip install -q fastapi uvicorn[standard]
+fi
 
 echo "Configuration:"
 echo "  Host: $HOST"

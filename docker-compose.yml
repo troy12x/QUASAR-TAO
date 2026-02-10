@@ -38,7 +38,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
     
     environment:
-      - NETUID=24
+      - NETUID=383
       - WALLET_NAME=validator
       - HOTKEY=default
       - CHALLENGE_URL=http://challenge:8080
