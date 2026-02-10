@@ -200,9 +200,9 @@ Key Bittensor settings:
 
 ```bash
 SUBTENSOR_NETWORK=test        # or finney for mainnet
-NETUID=24
-WALLET_MINER_NAME=quasar_miner
-WALLET_VALIDATOR_NAME=quasar_validator
+NETUID=383
+WALLET_MINER_NAME=Your_miner_wallet
+WALLET_VALIDATOR_NAME=Your_validator_wallet
 WALLET_HOTKEY=default
 ```
 
@@ -271,7 +271,6 @@ The miner inference container is defined using **rules_oci** in `docker-build/BU
 - **Render (CPU)**: Deploy via `render.yaml` using Dockerfile
 - **Local**: Use Docker directly with Dockerfiles
 
-**See**: [docs/DOCKER_DEPLOYMENT.md](docs/DOCKER_DEPLOYMENT.md) for complete guide.
 
 ### Building & Pushing with Bazel (Runpod)
 
