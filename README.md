@@ -253,7 +253,15 @@ python miner/inference_server.py
 
 The miner inference container is defined using **rules_oci** in `docker-build/BUILD.bazel`.
 
-### Building & Pushing with Bazel
+### Deployment Options
+
+- **Runpod (GPU)**: Use Bazel to build and push images (no Docker daemon required)
+- **Render (CPU)**: Deploy via `render.yaml` using Dockerfile
+- **Local**: Use Docker directly with Dockerfiles
+
+**See**: [docs/DOCKER_DEPLOYMENT.md](docs/DOCKER_DEPLOYMENT.md) for complete guide.
+
+### Building & Pushing with Bazel (Runpod)
 
 1. Ensure `DOCKER_USERNAME` is set in `.env`:
 
@@ -265,28 +273,54 @@ The miner inference container is defined using **rules_oci** in `docker-build/BU
 
    ```bash
    cd docker-build
-   ./push_miner.sh          # runs load_config_from_env.sh + bazel run //:push_miner_image
+   ./load_config_from_env.sh
+   
+   # GPU image (for Runpod)
+   bazel run //:push_miner_image_gpu
+   
+   # CPU image (for Render)
+   bazel run //:push_miner_image_cpu
+   
+   # Or use interactive script
+   ./push_miner.sh
    ```
 
-This will:
+This will push:
+- `index.docker.io/$DOCKER_USERNAME/quasar-miner-gpu:latest` (CUDA)
+- `index.docker.io/$DOCKER_USERNAME/quasar-miner-cpu:latest` (CPU)
 
-- Read `DOCKER_USERNAME` from `.env`
-- Generate `docker_config.bzl` containing `DOCKER_USERNAME`
-- Push `index.docker.io/$DOCKER_USERNAME/quasar-miner:latest`
+### Render Deployment
 
-### Manual Docker Build (without Bazel)
+Deploy both Validator API and Miner Inference Server via `render.yaml`:
 
-From `miner/`:
+1. Connect GitHub repository to Render
+2. Render auto-detects `render.yaml` and deploys both services
+3. Services available at:
+   - Validator API: `https://quasar-validator-api.onrender.com`
+   - Miner Inference: `https://quasar-miner-inference.onrender.com`
 
+**See**: [docs/RENDER_DEPLOYMENT.md](docs/RENDER_DEPLOYMENT.md)
+
+### Manual Docker Build (Local)
+
+**GPU Image**:
 ```bash
 cd miner
-docker build -f Dockerfile.inference -t quasar-miner:latest .
+docker build -f Dockerfile.inference -t quasar-miner-gpu:latest .
 
-docker run -d \
-  --name quasar-miner-inference \
-  --gpus all \
-  -p 8001:8000 \
-  quasar-miner:latest
+docker run -d --gpus all -p 8001:8000 \
+  -e MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct \
+  quasar-miner-gpu:latest
+```
+
+**CPU Image**:
+```bash
+docker build -f miner/Dockerfile.render -t quasar-miner-cpu:latest .
+
+docker run -d -p 8001:8000 \
+  -e MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct \
+  -e DEVICE=cpu \
+  quasar-miner-cpu:latest
 ```
 
 ---

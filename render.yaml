@@ -1,10 +1,28 @@
 services:
-  # Validator API (already deployed at quasar-subnet.onrender.com)
+  # Validator API
   - type: web
-    env: docker
+    name: quasar-validator-api
+    runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
     envVars:
       - key: DATABASE_URL
         value: sqlite:///./quasar.db
+    healthCheckPath: /health
+
+  # Miner Inference Server (CPU - for Render)
+  - type: web
+    name: quasar-miner-inference
+    runtime: docker
+    dockerfilePath: ./miner/Dockerfile.render
+    plan: free
+    envVars:
+      - key: MODEL_NAME
+        value: Qwen/Qwen2.5-0.5B-Instruct
+      - key: DEVICE
+        value: cpu
+      - key: PORT
+        value: 8000
+      - key: HOST
+        value: 0.0.0.0
     healthCheckPath: /health

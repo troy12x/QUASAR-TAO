@@ -1,0 +1,37 @@
+# Miner Inference Server for Render Deployment (CPU)
+# This is optimized for Render's CPU-only environment
+
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY miner/requirements.inference.txt requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy inference server
+COPY miner/inference_server.py .
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct
+ENV DEVICE=cpu
+ENV HOST=0.0.0.0
+ENV PORT=8000
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run server
+CMD ["python", "inference_server.py"]
