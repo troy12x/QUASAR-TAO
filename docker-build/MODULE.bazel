@@ -1,0 +1,2 @@
+# Bazel module file (required for Bazel 7+)
+module(name = "quasar_miner_docker")

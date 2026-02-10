@@ -18,10 +18,10 @@ genrule(
     """,
 )
 
-# Build the miner inference image
+# Build GPU miner inference image (for Runpod with CUDA)
 oci_image(
-    name = "quasar_miner_image",
-    base = "@python_base",
+    name = "quasar_miner_image_gpu",
+    base = "@cuda_base",
     tars = [":miner_files_tar"],
     env = {
         "PYTHONUNBUFFERED": "1",
@@ -30,22 +30,51 @@ oci_image(
         "HOST": "0.0.0.0",
         "PORT": "8000",
     },
-    entrypoint = ["/bin/sh", "-c", "pip install -r /app/requirements.txt && python /app/inference_server.py"],
+    entrypoint = ["/bin/sh", "-c", "apt-get update && apt-get install -y python3 python3-pip curl && pip3 install --no-cache-dir -r /app/requirements.txt && python3 /app/inference_server.py"],
     workdir = "/app",
 )
 
-# Push to Docker Hub (DOCKER_USERNAME from .env via docker_config.bzl)
-# Run: ./load_config_from_env.sh before push, or use ./push_miner.sh
+# Build CPU miner inference image (for Render deployment)
+oci_image(
+    name = "quasar_miner_image_cpu",
+    base = "@python_base",
+    tars = [":miner_files_tar"],
+    env = {
+        "PYTHONUNBUFFERED": "1",
+        "MODEL_NAME": "Qwen/Qwen2.5-0.5B-Instruct",
+        "DEVICE": "cpu",
+        "HOST": "0.0.0.0",
+        "PORT": "8000",
+    },
+    entrypoint = ["/bin/sh", "-c", "pip install --no-cache-dir -r /app/requirements.txt && python /app/inference_server.py"],
+    workdir = "/app",
+)
+
+# Push GPU image to Docker Hub
 oci_push(
-    name = "push_miner_image",
-    image = ":quasar_miner_image",
-    repository = "index.docker.io/" + DOCKER_USERNAME + "/quasar-miner",
+    name = "push_miner_image_gpu",
+    image = ":quasar_miner_image_gpu",
+    repository = "index.docker.io/" + DOCKER_USERNAME + "/quasar-miner-gpu",
     remote_tags = ["latest"],
 )
 
-# Create local tarball for testing
+# Push CPU image to Docker Hub
+oci_push(
+    name = "push_miner_image_cpu",
+    image = ":quasar_miner_image_cpu",
+    repository = "index.docker.io/" + DOCKER_USERNAME + "/quasar-miner-cpu",
+    remote_tags = ["latest"],
+)
+
+# Create local tarballs for testing
 oci_tarball(
-    name = "quasar_miner_tarball",
-    image = ":quasar_miner_image",
-    repo_tags = ["quasar-miner:latest"],
+    name = "quasar_miner_tarball_gpu",
+    image = ":quasar_miner_image_gpu",
+    repo_tags = ["quasar-miner-gpu:latest"],
+)
+
+oci_tarball(
+    name = "quasar_miner_tarball_cpu",
+    image = ":quasar_miner_image_cpu",
+    repo_tags = ["quasar-miner-cpu:latest"],
 )
