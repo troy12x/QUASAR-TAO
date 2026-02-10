@@ -301,18 +301,6 @@ This will push:
 - `index.docker.io/$DOCKER_USERNAME/quasar-miner-gpu:latest` (CUDA)
 - `index.docker.io/$DOCKER_USERNAME/quasar-miner-cpu:latest` (CPU)
 
-### Render Deployment
-
-Deploy both Validator API and Miner Inference Server via `render.yaml`:
-
-1. Connect GitHub repository to Render
-2. Render auto-detects `render.yaml` and deploys both services
-3. Services available at:
-   - Validator API: `https://quasar-validator-api.onrender.com`
-   - Miner Inference: `https://quasar-miner-inference.onrender.com`
-
-**See**: [docs/RENDER_DEPLOYMENT.md](docs/RENDER_DEPLOYMENT.md)
-
 ### Manual Docker Build (Local)
 
 **GPU Image**:
