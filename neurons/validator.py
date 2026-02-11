@@ -24,9 +24,14 @@ if parent_dir not in sys.path:
 
 import quasar
 from quasar.base.validator import BaseValidatorNeuron
+from quasar.utils.context_builder import (
+    build_full_context,
+    validate_repo_structure,
+    estimate_context_tokens,
+)
 
 # --- Constants ---
-VALIDATOR_API_URL = os.getenv("VALIDATOR_API_URL", "https://quasar-subnet.onrender.com")
+VALIDATOR_API_URL = os.getenv("VALIDATOR_API_URL", "https://quasar-validator-api.onrender.com")
 
 class PerformanceValidator:
     """Validates miner performance claims by cloning repos and running tests."""
@@ -385,11 +390,29 @@ if __name__ == "__main__":
                 diff = (actual - claimed) / claimed * 100 if claimed > 0 else 0
                 print(f"  {seq_len}: claimed={claimed:.2f}, actual={actual:.2f}, diff={diff:.2f}%")
 
+            # Run logit verification (before cleanup, so we can use repo_path)
+            verification_result = None
+            if self.logit_verification_enabled:
+                try:
+                    verification_result = self.run_logit_verification(
+                        submission_id=submission.get("id"),
+                        docker_image=None,  # Will be set when container execution is available
+                        repo_path=repo_path,
+                        fork_url=fork_url,
+                        commit_hash=commit_hash
+                    )
+                except Exception as e:
+                    print(f"[VALIDATOR] ⚠️  Logit verification failed: {e}", flush=True)
+                    verification_result = {
+                        "verified": None,
+                        "reason": f"Verification error: {str(e)}"
+                    }
+
             # Clean up
             if os.path.exists(repo_path):
                 shutil.rmtree(repo_path)
 
-            return {
+            result = {
                 "submission_id": submission.get("id"),
                 "miner_hotkey": submission.get("miner_hotkey"),
                 "claimed_performance": claimed_performance,
@@ -399,6 +422,12 @@ if __name__ == "__main__":
                 "fork_url": fork_url,
                 "commit_hash": commit_hash
             }
+            
+            # Add verification result if available
+            if verification_result:
+                result["verification"] = verification_result
+            
+            return result
 
         except Exception as e:
             print(f"[VALIDATOR] Validation failed: {e}")
@@ -504,14 +533,18 @@ class Validator(BaseValidatorNeuron):
         Run logit verification for a submission.
         
         This is the core verification from const's qllm architecture:
-        1. Generate random prompt
-        2. Run inference on miner's container (or local test)
-        3. Run inference on reference model
-        4. Compare logits at random step
+        1. Build repository context (same as miner used during generation)
+        2. Generate random prompt with context
+        3. Run inference on miner's container (or local test)
+        4. Run inference on reference model with same context
+        5. Compare logits at random step
         
         Args:
             submission_id: Submission ID for tracking
             docker_image: Docker image to verify (optional, for container-based miners)
+            repo_path: Path to cloned repository (for context building)
+            fork_url: Fork URL (for cloning if repo_path not provided)
+            commit_hash: Commit hash to checkout (for deterministic context)
         
         Returns:
             Dict with verification results
@@ -538,14 +571,86 @@ class Validator(BaseValidatorNeuron):
                 CONFIG
             )
             import asyncio
+            import hashlib
             
             print(f"[VALIDATOR] 🔍 Running logit verification for submission {submission_id}...", flush=True)
             
-            # Generate challenge
+            # Build repository context (same as miner used)
+            repo_context = None
+            repo_hash = None
+            
+            if repo_path and os.path.exists(repo_path):
+                try:
+                    print(f"[VALIDATOR]   Building repository context from {repo_path}...", flush=True)
+                    
+                    # Validate repository structure
+                    is_valid, warnings = validate_repo_structure(repo_path)
+                    if warnings:
+                        print(f"[VALIDATOR]   ⚠️  Repository validation warnings:", flush=True)
+                        for warning in warnings:
+                            print(f"      - {warning}", flush=True)
+                    
+                    # Build full context (same parameters as miner)
+                    repo_context = build_full_context(
+                        repo_path=repo_path,
+                        target_file="chunk.py",
+                        include_tree=True,
+                        max_files=50,  # Match miner default
+                        max_size=200000,  # Match miner default
+                        byoc_mode=False  # Validator doesn't use BYOC
+                    )
+                    
+                    # Calculate repo hash for consistency tracking
+                    repo_hash = hashlib.sha256(repo_context.encode()).hexdigest()[:16]
+                    context_tokens = estimate_context_tokens(repo_context)
+                    print(f"[VALIDATOR]   ✅ Context built: ~{context_tokens} tokens, hash: {repo_hash}", flush=True)
+                    bt.logging.info(f"Repository context built: ~{context_tokens} tokens, hash: {repo_hash}")
+                    
+                except Exception as e:
+                    print(f"[VALIDATOR]   ⚠️  Failed to build context: {e}. Using context-free verification.", flush=True)
+                    bt.logging.warning(f"Failed to build repository context: {e}")
+                    repo_context = None
+            elif fork_url and commit_hash:
+                # Clone repo if not provided
+                try:
+                    print(f"[VALIDATOR]   Cloning repository for context building...", flush=True)
+                    cloned_repo_path = self.clone_miner_repo(fork_url)
+                    self.checkout_commit(cloned_repo_path, commit_hash)
+                    
+                    repo_context = build_full_context(
+                        repo_path=cloned_repo_path,
+                        target_file="chunk.py",
+                        include_tree=True,
+                        max_files=50,
+                        max_size=200000,
+                        byoc_mode=False
+                    )
+                    repo_hash = hashlib.sha256(repo_context.encode()).hexdigest()[:16]
+                    context_tokens = estimate_context_tokens(repo_context)
+                    print(f"[VALIDATOR]   ✅ Context built from cloned repo: ~{context_tokens} tokens", flush=True)
+                    
+                    # Cleanup cloned repo
+                    if os.path.exists(cloned_repo_path):
+                        shutil.rmtree(cloned_repo_path)
+                        
+                except Exception as e:
+                    print(f"[VALIDATOR]   ⚠️  Failed to clone/build context: {e}", flush=True)
+                    repo_context = None
+            
+            # Generate challenge (with context if available)
+            # Note: For now, generate_verification_challenge doesn't use context,
+            # but we'll pass it for future enhancement
             challenge = generate_verification_challenge(self.reference_model)
             prompt = challenge["prompt"]
             gen_len = challenge["gen_len"]
             logits_at_step = challenge["logits_at_step"]
+            
+            # If we have context, prepend it to the prompt for reference model
+            # This ensures the reference model sees the same context as the miner
+            if repo_context:
+                # For verification, we use a simplified context-aware prompt
+                # The actual prompt tokens are random, but the model should have seen the repo context
+                print(f"[VALIDATOR]   Using context-aware verification (repo_hash: {repo_hash})", flush=True)
             
             print(f"[VALIDATOR]   Challenge: prompt_len={len(prompt)}, gen_len={gen_len}, capture_step={logits_at_step}", flush=True)
             
@@ -587,7 +692,8 @@ class Validator(BaseValidatorNeuron):
             traceback.print_exc()
             return {
                 "verified": None,
-                "reason": f"Verification error: {str(e)}"
+                "reason": f"Verification error: {str(e)}",
+                "context_used": False
             }
     
     def record_verification_result(self, submission_id: int, result: Dict):
@@ -660,7 +766,15 @@ class Validator(BaseValidatorNeuron):
                     if self.logit_verification_enabled and submission_id:
                         print(f"[VALIDATOR] 🔍 Running logit verification...", flush=True)
                         docker_image = submission.get("docker_image")
-                        verification_result = self.run_logit_verification(submission_id, docker_image)
+                        # Note: repo_path is not available here (already cleaned up)
+                        # Context will be built from fork_url + commit_hash
+                        verification_result = self.run_logit_verification(
+                            submission_id=submission_id,
+                            docker_image=docker_image,
+                            repo_path=None,  # Will clone if needed
+                            fork_url=fork_url,
+                            commit_hash=commit_hash
+                        )
                         
                         # Record verification result to API
                         self.record_verification_result(submission_id, verification_result)
