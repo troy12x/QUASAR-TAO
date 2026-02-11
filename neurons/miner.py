@@ -734,15 +734,22 @@ class Miner(BaseMinerNeuron):
                 benchmarks = {}
 
             target_metrics = benchmarks.get(int(self.target_sequence_length), {"tokens_per_sec": performance, "vram_mb": 0.0})
+            
+            # Include repo_hash in signature for consistency
+            signature_data = f"{fork_url}{commit_hash}{performance}{json.dumps(benchmarks, sort_keys=True)}"
+            if self.repo_hash:
+                signature_data += f"{self.repo_hash}"
+            
             payload = {
                 "miner_hotkey": self.wallet.hotkey.ss58_address,
                 "fork_url": fork_url,
                 "commit_hash": commit_hash,
+                "repo_hash": self.repo_hash,  # Repository context hash for consistency
                 "target_sequence_length": self.target_sequence_length,
                 "tokens_per_sec": target_metrics.get("tokens_per_sec", performance),
                 "vram_mb": float(target_metrics.get("vram_mb", 0.0)),
                 "benchmarks": benchmarks,
-                "signature": self._sign_message(f"{fork_url}{commit_hash}{performance}{json.dumps(benchmarks, sort_keys=True)}")
+                "signature": self._sign_message(signature_data)
             }
             
             headers = self._get_auth_headers()
@@ -834,6 +841,7 @@ class Miner(BaseMinerNeuron):
         
         # Build repository context (once, reused across iterations)
         repo_context = None
+        repo_hash = None
         if self.use_full_context:
             try:
                 print(f"[MINER] Building full repository context...", flush=True)
@@ -847,12 +855,23 @@ class Miner(BaseMinerNeuron):
                     byoc_file_path=self.byoc_file_path
                 )
                 context_tokens = estimate_context_tokens(repo_context)
-                print(f"[MINER] ✅ Repository context built: ~{context_tokens} tokens", flush=True)
-                bt.logging.info(f"Repository context built: ~{context_tokens} tokens")
+                
+                # Calculate repo_hash for consistency tracking
+                import hashlib
+                repo_hash = hashlib.sha256(repo_context.encode()).hexdigest()[:16]
+                
+                print(f"[MINER] ✅ Repository context built: ~{context_tokens} tokens, hash: {repo_hash}", flush=True)
+                bt.logging.info(f"Repository context built: ~{context_tokens} tokens, hash: {repo_hash}")
+                
+                # Store repo_hash for submission
+                self.repo_hash = repo_hash
             except Exception as e:
                 print(f"[MINER] ⚠️  Failed to build full context: {e}. Using minimal context.", flush=True)
                 bt.logging.warning(f"Failed to build full context: {e}")
                 repo_context = None
+                self.repo_hash = None
+        else:
+            self.repo_hash = None
 
         for iteration in range(self.agent_iterations):
             print(f"\n[MINER] --- Iteration {iteration + 1}/{self.agent_iterations} ---", flush=True)

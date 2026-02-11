@@ -305,6 +305,7 @@ if __name__ == "__main__":
         """Validate a single submission."""
         fork_url = submission.get("fork_url")
         commit_hash = submission.get("commit_hash")
+        repo_hash = submission.get("repo_hash")  # Repository context hash from miner
         claimed_performance = submission.get("tokens_per_sec")
         target_sequence_length = submission.get("target_sequence_length", 100000)
         claimed_benchmarks_json = submission.get("benchmarks")
@@ -401,11 +402,29 @@ if __name__ == "__main__":
                         fork_url=fork_url,
                         commit_hash=commit_hash
                     )
+                    
+                    # Verify repo_hash consistency if provided
+                    if repo_hash and verification_result.get("repo_hash"):
+                        validator_repo_hash = verification_result.get("repo_hash")
+                        if repo_hash != validator_repo_hash:
+                            print(f"[VALIDATOR] ⚠️  Repo hash mismatch! Miner: {repo_hash}, Validator: {validator_repo_hash}", flush=True)
+                            verification_result["repo_hash_match"] = False
+                            verification_result["reason"] = f"Repo hash mismatch: miner={repo_hash}, validator={validator_repo_hash}"
+                        else:
+                            print(f"[VALIDATOR] ✅ Repo hash matches: {repo_hash}", flush=True)
+                            verification_result["repo_hash_match"] = True
+                    elif repo_hash:
+                        print(f"[VALIDATOR] ⚠️  Miner provided repo_hash but validator couldn't build context", flush=True)
+                        verification_result["repo_hash_match"] = None
+                    else:
+                        verification_result["repo_hash_match"] = None  # No hash provided
+                        
                 except Exception as e:
                     print(f"[VALIDATOR] ⚠️  Logit verification failed: {e}", flush=True)
                     verification_result = {
                         "verified": None,
-                        "reason": f"Verification error: {str(e)}"
+                        "reason": f"Verification error: {str(e)}",
+                        "repo_hash_match": None
                     }
 
             # Clean up
@@ -420,7 +439,8 @@ if __name__ == "__main__":
                 "results_by_seq_len": results_by_seq_len,
                 "score": score,
                 "fork_url": fork_url,
-                "commit_hash": commit_hash
+                "commit_hash": commit_hash,
+                "repo_hash": repo_hash  # Include repo_hash in result
             }
             
             # Add verification result if available

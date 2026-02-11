@@ -91,6 +91,7 @@ class SpeedSubmission(Base):
     miner_uid = Column(Integer)
     fork_url = Column(String)
     commit_hash = Column(String)
+    repo_hash = Column(String, nullable=True, index=True)  # Hash of repository context for consistency
     target_sequence_length = Column(Integer)
     tokens_per_sec = Column(Float)
     vram_mb = Column(Float, nullable=True)
@@ -222,6 +223,7 @@ class SpeedSubmissionRequest(BaseModel):
     miner_hotkey: str
     fork_url: str
     commit_hash: str
+    repo_hash: Optional[str] = None  # Hash of repository context for consistency
     target_sequence_length: int
     tokens_per_sec: float
     vram_mb: Optional[float] = None
@@ -233,6 +235,7 @@ class SpeedSubmissionResponse(BaseModel):
     miner_hotkey: str
     fork_url: str
     commit_hash: str
+    repo_hash: Optional[str] = None  # Repository context hash
     target_sequence_length: int
     tokens_per_sec: float
     vram_mb: Optional[float] = None
