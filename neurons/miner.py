@@ -78,15 +78,15 @@ class Miner(BaseMinerNeuron):
             total_mem, free_mem = torch.cuda.mem_get_info()
             print(f"[MINER] GPU Memory: {free_mem/1024**3:.2f} GB free / {total_mem/1024**3:.2f} GB total", flush=True)
         
-        # Get model name from config, env var, or use default (larger model for better code generation)
+        # Get model name from config, env var, or use default (DeepSeek-V3.2 for better code understanding)
         self.model_name = os.getenv("MINER_MODEL_NAME", 
-            getattr(self.config.miner, 'model_name', "Qwen/Qwen3-4B-Instruct-2507"))
+            getattr(self.config.miner, 'model_name', "deepseek-ai/DeepSeek-V3.2"))
         
         # Estimate model size and adjust parameters (Phase 2: Model-specific config)
         model_size = self._estimate_model_size(self.model_name)
         if model_size < 1.0:  # < 1B
             print(f"[MINER] ⚠️  WARNING: Model {self.model_name} is small (<1B). Consider using larger model (>1B) for better error fixing.")
-            print(f"[MINER] ⚠️  Recommended: Qwen/Qwen3-4B-Instruct-2507 or set MINER_MODEL_NAME env var", flush=True)
+            print(f"[MINER] ⚠️  Recommended: deepseek-ai/DeepSeek-V3.2 or set MINER_MODEL_NAME env var", flush=True)
             self.agent_max_new_tokens = 2048  # Reduce for small models
         elif model_size >= 4.0:  # >= 4B
             self.agent_max_new_tokens = 8192  # Increase for large models
@@ -144,6 +144,21 @@ class Miner(BaseMinerNeuron):
             return 7.0
         elif "13b" in name_lower:
             return 13.0
+        # DeepSeek models
+        if "deepseek" in name_lower:
+            if "v4" in name_lower or "v3.2" in name_lower:
+                return 67.0  # DeepSeek-V3.2/V4 are ~67B parameters
+            elif "v3" in name_lower or "v2" in name_lower:
+                return 67.0  # DeepSeek-V3/V2 are ~67B parameters
+            elif "coder" in name_lower:
+                if "1.3" in name_lower or "1.5" in name_lower:
+                    return 1.5
+                elif "6.7" in name_lower or "7b" in name_lower:
+                    return 7.0
+                elif "33b" in name_lower:
+                    return 33.0
+            return 67.0  # Default DeepSeek to large model
+        
         # Default assumption based on model name
         if "qwen3" in name_lower and "4b" in name_lower:
             return 4.0

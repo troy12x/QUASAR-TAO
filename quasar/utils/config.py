@@ -257,8 +257,8 @@ def add_miner_args(cls, parser):
     parser.add_argument(
         "--miner.model_name",
         type=str,
-        default="Qwen/Qwen3-4B-Thinking-2507",
-        help="The name of the model to use for inference.",
+        default="deepseek-ai/DeepSeek-V3.2",
+        help="The name of the model to use for inference. Recommended: DeepSeek-V3.2 or DeepSeek-V4 (when available).",
     )
     parser.add_argument(
         "--miner.max_length",

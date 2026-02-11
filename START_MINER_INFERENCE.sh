@@ -27,7 +27,7 @@ fi
 export MINER_INFERENCE_PORT=${MINER_INFERENCE_PORT:-8001}
 export PORT=$MINER_INFERENCE_PORT
 export HOST=${HOST:-"0.0.0.0"}
-export MODEL_NAME=${REFERENCE_MODEL:-"Qwen/Qwen2.5-0.5B-Instruct"}
+export MODEL_NAME=${REFERENCE_MODEL:-"deepseek-ai/DeepSeek-V3.2"}
 export DEVICE=${DEVICE:-"cuda"}
 
 echo "Configuration:"

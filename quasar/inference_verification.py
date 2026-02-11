@@ -54,8 +54,8 @@ class InferenceVerificationConfig:
     # Network configuration
     netuid: int = int(os.environ.get("NETUID", 383))
     
-    # Reference model (Qwen/Qwen2.5-0.5B-Instruct as specified)
-    reference_model: str = os.environ.get("REFERENCE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+    # Reference model (DeepSeek-V3.2 for better code understanding and verification)
+    reference_model: str = os.environ.get("REFERENCE_MODEL", "deepseek-ai/DeepSeek-V3.2")
     
     # Inference configuration
     prompt_length: int = 128  # Random prompt token length
