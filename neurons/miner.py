@@ -27,6 +27,12 @@ if parent_dir not in sys.path:
 
 import quasar
 from quasar.base.miner import BaseMinerNeuron
+from quasar.utils.context_builder import (
+    build_full_context,
+    build_minimal_context,
+    validate_repo_structure,
+    estimate_context_tokens,
+)
 
 class Miner(BaseMinerNeuron):
     """
@@ -815,6 +821,38 @@ class Miner(BaseMinerNeuron):
 
         print(f"[MINER] Starting optimization loop...", flush=True)
         bt.logging.info("Starting optimization loop")
+        
+        # Store repo_path for context builder
+        self.repo_path = repo_path
+        
+        # Validate repository structure
+        is_valid, warnings = validate_repo_structure(repo_path)
+        if warnings:
+            print(f"[MINER] ⚠️  Repository validation warnings:", flush=True)
+            for warning in warnings:
+                print(f"  - {warning}", flush=True)
+        
+        # Build repository context (once, reused across iterations)
+        repo_context = None
+        if self.use_full_context:
+            try:
+                print(f"[MINER] Building full repository context...", flush=True)
+                repo_context = build_full_context(
+                    repo_path=repo_path,
+                    target_file="chunk.py",
+                    include_tree=True,
+                    max_files=self.context_max_files,
+                    max_size=self.context_max_size,
+                    byoc_mode=self.byoc_file_path is not None,
+                    byoc_file_path=self.byoc_file_path
+                )
+                context_tokens = estimate_context_tokens(repo_context)
+                print(f"[MINER] ✅ Repository context built: ~{context_tokens} tokens", flush=True)
+                bt.logging.info(f"Repository context built: ~{context_tokens} tokens")
+            except Exception as e:
+                print(f"[MINER] ⚠️  Failed to build full context: {e}. Using minimal context.", flush=True)
+                bt.logging.warning(f"Failed to build full context: {e}")
+                repo_context = None
 
         for iteration in range(self.agent_iterations):
             print(f"\n[MINER] --- Iteration {iteration + 1}/{self.agent_iterations} ---", flush=True)
@@ -827,10 +865,21 @@ class Miner(BaseMinerNeuron):
                     with open(filepath, 'r') as f:
                         file_contents[filename] = f.read()
 
-            # Construct prompt
+            # Construct prompt with full context
+            context_note = ""
+            if repo_context:
+                context_note = (
+                    "\n\nIMPORTANT: You have been provided with FULL REPOSITORY CONTEXT including:\n"
+                    "- Complete file tree\n"
+                    "- All relevant source files (.py, .cu, .cuh, .h)\n"
+                    "- Files that reference chunk_quasar, quasar, attention, and kernel functionality\n"
+                    "- Use this context to understand the complete codebase contract and ensure compatibility.\n"
+                )
+            
             system_prompt = (
                 "You are an expert AI kernel engineer optimizing Quasar Attention.\n"
                 "You are part of an ITERATIVE ERROR-FIXING SYSTEM.\n"
+                + context_note +
                 "When you see errors, you MUST:\n"
                 "1. Read the error message CAREFULLY\n"
                 "2. Identify the EXACT line and operation causing the error\n"
@@ -877,15 +926,33 @@ class Miner(BaseMinerNeuron):
                 "6. Avoid creating copies unnecessarily - use .contiguous() only when needed\n"
             )
 
-            user_prompt = "Here are the current files:\n\n"
-            for fname, content in file_contents.items():
-                if fname in ["chunk.py", "fused_recurrent.py", "gate.py"]:
-                    user_prompt += f"=== {fname} ===\n{content}\n\n"
-            
-            user_prompt += (
-                "Please rewrite `chunk.py` and `fused_recurrent.py` to use the kernelized gate mechanism from `gate.py`. "
-                "Remove the pure PyTorch alpha/beta computation."
-            )
+            # Build user prompt with context
+            if repo_context:
+                # Use full repository context
+                user_prompt = repo_context + "\n\n"
+                user_prompt += "# ════════════════════════════════════════════════════════════════════════\n"
+                user_prompt += "# CURRENT TARGET FILES (for reference)\n"
+                user_prompt += "# ════════════════════════════════════════════════════════════════════════\n\n"
+                for fname, content in file_contents.items():
+                    if fname in ["chunk.py", "fused_recurrent.py", "gate.py"]:
+                        user_prompt += f"=== {fname} ===\n{content}\n\n"
+                
+                user_prompt += (
+                    "Based on the FULL REPOSITORY CONTEXT above, please rewrite `chunk.py` and `fused_recurrent.py` "
+                    "to use the kernelized gate mechanism from `gate.py`. Remove the pure PyTorch alpha/beta computation.\n\n"
+                    "CRITICAL: Ensure `chunk_quasar` function is exported correctly and matches the expected API from the codebase."
+                )
+            else:
+                # Fallback to minimal context (original behavior)
+                user_prompt = "Here are the current files:\n\n"
+                for fname, content in file_contents.items():
+                    if fname in ["chunk.py", "fused_recurrent.py", "gate.py"]:
+                        user_prompt += f"=== {fname} ===\n{content}\n\n"
+                
+                user_prompt += (
+                    "Please rewrite `chunk.py` and `fused_recurrent.py` to use the kernelized gate mechanism from `gate.py`. "
+                    "Remove the pure PyTorch alpha/beta computation."
+                )
 
             # Generate code with streaming
             # We wrap this in a retry loop to handle test failures
@@ -1339,6 +1406,16 @@ if __name__ == "__main__":
                        help="Max token length for input tokenization (default: 8192)")
     parser.add_argument("--max-new-tokens", type=int, default=4096,
                        help="Max new tokens to generate (default: 4096)")
+    parser.add_argument("--repo-path", type=str, default=None,
+                       help="Path to local repository (if not provided, will clone fork)")
+    parser.add_argument("--byoc-file", type=str, default=None,
+                       help="Path to expert's optimized code file (Bring-Your-Own-Code mode)")
+    parser.add_argument("--use-full-context", action="store_true", default=None,
+                       help="Use full repository context (default: from USE_FULL_CONTEXT env var)")
+    parser.add_argument("--context-max-files", type=int, default=50,
+                       help="Maximum number of files to include in context (default: 50)")
+    parser.add_argument("--context-max-size", type=int, default=200000,
+                       help="Maximum context size in characters (default: 200000)")
     
     # Create config - bt.Config will parse sys.argv automatically
     config = bt.Config(parser)
@@ -1359,6 +1436,23 @@ if __name__ == "__main__":
         if args.test_mode:
             miner.TARGET_FILES = ["chunk.py"]
             print(f"[MINER] Test mode: only optimizing chunk.py", flush=True)
+        
+        # Context builder configuration
+        if args.repo_path:
+            miner.repo_path = args.repo_path
+            print(f"[MINER] Using provided repo path: {args.repo_path}", flush=True)
+        if args.byoc_file:
+            miner.byoc_file_path = args.byoc_file
+            print(f"[MINER] BYOC mode enabled: {args.byoc_file}", flush=True)
+        if args.use_full_context is not None:
+            miner.use_full_context = args.use_full_context
+        miner.context_max_files = args.context_max_files
+        miner.context_max_size = args.context_max_size
+        
+        print(f"[MINER] Context configuration:", flush=True)
+        print(f"  - Use full context: {miner.use_full_context}", flush=True)
+        print(f"  - Max files: {miner.context_max_files}", flush=True)
+        print(f"  - Max size: {miner.context_max_size} chars", flush=True)
         
         # Load model
         print(" [MINER] Loading model...")
