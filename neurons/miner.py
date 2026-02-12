@@ -907,6 +907,18 @@ class Miner(BaseMinerNeuron):
                 "You are an expert AI kernel engineer optimizing Quasar Attention.\n"
                 "You are part of an ITERATIVE ERROR-FIXING SYSTEM.\n"
                 + context_note +
+                "\n"
+                "🔴 CRITICAL: INSTRUCTION FOLLOWING IS MANDATORY\n"
+                "─────────────────────────────────────────────────────────────────────\n"
+                "You MUST follow ALL instructions provided in the context EXACTLY.\n"
+                "When expert code or specific instructions are provided:\n"
+                "1. READ the instructions CAREFULLY before generating code\n"
+                "2. UNDERSTAND what is being asked - do not skip or ignore instructions\n"
+                "3. FOLLOW the step-by-step guidance provided\n"
+                "4. USE expert code as your reference when provided\n"
+                "5. VERIFY your output matches the requirements before submitting\n"
+                "6. DO NOT deviate from explicit instructions - they are there for a reason\n"
+                "\n"
                 "When you see errors, you MUST:\n"
                 "1. Read the error message CAREFULLY\n"
                 "2. Identify the EXACT line and operation causing the error\n"
@@ -964,10 +976,26 @@ class Miner(BaseMinerNeuron):
                     if fname in ["chunk.py", "fused_recurrent.py", "gate.py"]:
                         user_prompt += f"=== {fname} ===\n{content}\n\n"
                 
+                # Add instruction-following emphasis
+                if self.byoc_file_path:
+                    user_prompt += (
+                        "# 🔴 CRITICAL INSTRUCTIONS - READ CAREFULLY:\n"
+                        "# ────────────────────────────────────────────────────────────────────────\n"
+                        "# Expert code has been provided above. You MUST:\n"
+                        "# 1. USE the expert code as your PRIMARY reference\n"
+                        "# 2. FOLLOW the implementation approach shown in expert code\n"
+                        "# 3. ADAPT the expert code structure to match repository conventions\n"
+                        "# 4. DO NOT ignore or deviate from the expert code\n"
+                        "# 5. VERIFY all function signatures match before outputting\n"
+                        "# ────────────────────────────────────────────────────────────────────────\n\n"
+                    )
+                
                 user_prompt += (
                     "Based on the FULL REPOSITORY CONTEXT above, please rewrite `chunk.py` and `fused_recurrent.py` "
                     "to use the kernelized gate mechanism from `gate.py`. Remove the pure PyTorch alpha/beta computation.\n\n"
-                    "CRITICAL: Ensure `chunk_quasar` function is exported correctly and matches the expected API from the codebase."
+                    "CRITICAL: Ensure `chunk_quasar` function is exported correctly and matches the expected API from the codebase.\n\n"
+                    "REMEMBER: Follow ALL instructions provided in the context above. Read the MANDATORY INSTRUCTIONS section carefully "
+                    "and verify your output matches all requirements."
                 )
             else:
                 # Fallback to minimal context (original behavior)
