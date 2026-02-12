@@ -892,110 +892,81 @@ class Miner(BaseMinerNeuron):
                     with open(filepath, 'r') as f:
                         file_contents[filename] = f.read()
 
-            # Construct prompt with full context
-            context_note = ""
-            if repo_context:
-                context_note = (
-                    "\n\nIMPORTANT: You have been provided with FULL REPOSITORY CONTEXT including:\n"
-                    "- Complete file tree\n"
-                    "- All relevant source files (.py, .cu, .cuh, .h)\n"
-                    "- Files that reference chunk_quasar, quasar, attention, and kernel functionality\n"
-                    "- Use this context to understand the complete codebase contract and ensure compatibility.\n"
-                )
-            
+            # Construct simplified, focused system prompt
             system_prompt = (
-                "You are an expert AI kernel engineer optimizing Quasar Attention.\n"
-                "You are part of an ITERATIVE ERROR-FIXING SYSTEM.\n"
-                + context_note +
-                "\n"
-                "🔴 CRITICAL: INSTRUCTION FOLLOWING IS MANDATORY\n"
-                "─────────────────────────────────────────────────────────────────────\n"
-                "You MUST follow ALL instructions provided in the context EXACTLY.\n"
-                "When expert code or specific instructions are provided:\n"
-                "1. READ the instructions CAREFULLY before generating code\n"
-                "2. UNDERSTAND what is being asked - do not skip or ignore instructions\n"
-                "3. FOLLOW the step-by-step guidance provided\n"
-                "4. USE expert code as your reference when provided\n"
-                "5. VERIFY your output matches the requirements before submitting\n"
-                "6. DO NOT deviate from explicit instructions - they are there for a reason\n"
-                "\n"
-                "When you see errors, you MUST:\n"
-                "1. Read the error message CAREFULLY\n"
-                "2. Identify the EXACT line and operation causing the error\n"
-                "3. Understand WHY the error occurred (tensor shape mismatch, syntax error, etc.)\n"
-                "4. Make a MINIMAL fix that addresses ONLY that specific error\n"
-                "5. Keep ALL other code unchanged\n"
-                "6. Verify your fix by checking tensor shapes match before operations\n\n"
-                "COMMON ERROR PATTERNS YOU MUST FIX:\n"
-                "1. Tensor shape mismatch: Check all .view(), .expand(), .unsqueeze() operations\n"
-                "2. IndentationError: Ensure code starts at column 0, use 4 spaces for indentation\n"
-                "3. AttributeError: Check that you're calling methods on the correct object type\n"
-                "4. Import errors: Don't add new imports, use existing ones\n\n"
-                "ERROR-FIXING WORKFLOW:\n"
-                "1. Read the error message\n"
-                "2. Find the file and line number mentioned\n"
-                "3. Look at that specific line in the code\n"
-                "4. Understand what's wrong (shape mismatch, syntax, etc.)\n"
-                "5. Make the MINIMAL change needed to fix it\n"
-                "6. Output the COMPLETE file with your fix\n\n"
-                "CRITICAL OUTPUT FORMAT:\n"
-                "You MUST wrap your code in markdown code blocks like this example:\n\n"
+                "You are an expert AI kernel engineer. Your job is to write optimized CUDA kernel code.\n\n"
+                "WORKFLOW:\n"
+                "1. Read the TASK section carefully - this tells you exactly what to do\n"
+                "2. Review the CONTEXT section - use it to understand code structure and requirements\n"
+                "3. If expert code is provided, USE IT as your primary reference\n"
+                "4. Generate code that matches function signatures and follows repository patterns\n"
+                "5. Output code wrapped in markdown: ```python:filename.py\n\n"
+                "OUTPUT FORMAT:\n"
+                "Wrap your code in markdown code blocks:\n"
                 "```python:chunk.py\n"
-                "import torch\n"
-                "import triton\n"
-                "# ... rest of the code ...\n"
+                "[your code here]\n"
                 "```\n\n"
-                "CRITICAL IMPORT RULES:\n"
-                "1. DO NOT add new imports\n"
-                "2. DO NOT import fused_quasar_gate\n"
-                "3. Keep ALL existing imports EXACTLY as they are\n"
-                "4. MUST use correct import names from fla.utils:\n"
-                "   - Use 'IS_AMD' (with underscore), NOT 'ISAMD'\n"
-                "   - Use 'autocast_custom_bwd', 'autocast_custom_fwd'\n"
-                "   - Use 'autotune_cache_kwargs', 'check_shared_mem', 'input_guard'\n"
-                "5. MUST include: chunk_quasar_fwd, ChunkQuasarFunction, chunk_quasar\n"
-                "6. The code fence line is NOT Python code - it's markdown formatting\n"
-                "7. Start your actual Python code on the line AFTER the fence\n\n"
-                "MEMORY EFFICIENCY RULES:\n"
-                "1. Use memory-efficient operations - avoid large intermediate tensors\n"
-                "2. Process data in chunks when possible to reduce memory footprint\n"
-                "3. Use in-place operations (e.g., tensor.add_(), tensor.mul_()) where safe\n"
-                "4. Free intermediate tensors with 'del tensor' after use\n"
-                "5. Use tensor views (.view(), .reshape()) carefully - ensure tensors are contiguous\n"
-                "6. Avoid creating copies unnecessarily - use .contiguous() only when needed\n"
+                "CRITICAL RULES:\n"
+                "- Match function signatures exactly from the codebase\n"
+                "- Keep existing imports - don't add new ones\n"
+                "- Export chunk_quasar function correctly\n"
+                "- Follow code style from repository files\n"
             )
 
-            # Build user prompt with context
+            # Build user prompt with TASK FIRST, then context
             if repo_context:
-                # Use full repository context
-                user_prompt = repo_context + "\n\n"
-                user_prompt += "# ════════════════════════════════════════════════════════════════════════\n"
-                user_prompt += "# CURRENT TARGET FILES (for reference)\n"
-                user_prompt += "# ════════════════════════════════════════════════════════════════════════\n\n"
+                # TASK SECTION - Put this FIRST so LLM sees it immediately
+                user_prompt = "=" * 80 + "\n"
+                user_prompt += "TASK: Rewrite chunk.py and fused_recurrent.py\n"
+                user_prompt += "=" * 80 + "\n\n"
+                
+                if self.byoc_file_path:
+                    user_prompt += (
+                        "⚠️ EXPERT CODE PROVIDED - USE IT AS YOUR PRIMARY REFERENCE\n"
+                        "────────────────────────────────────────────────────────────\n"
+                        "Expert code is shown in the CONTEXT section below.\n"
+                        "You MUST use the expert code's implementation approach.\n"
+                        "Adapt it to match repository structure, but keep the core logic.\n\n"
+                    )
+                
+                user_prompt += (
+                    "REQUIREMENTS:\n"
+                    "1. Rewrite chunk.py and fused_recurrent.py to use kernelized gate from gate.py\n"
+                    "2. Remove pure PyTorch alpha/beta computation\n"
+                    "3. Export chunk_quasar function correctly (check __init__.py in context)\n"
+                    "4. Match function signatures from the codebase\n"
+                    "5. Keep all existing imports\n"
+                    "6. Follow code patterns from repository files\n\n"
+                )
+                
+                user_prompt += "=" * 80 + "\n"
+                user_prompt += "CONTEXT: Repository files and structure\n"
+                user_prompt += "=" * 80 + "\n\n"
+                user_prompt += "Use this context to understand:\n"
+                user_prompt += "- Function signatures and exports\n"
+                user_prompt += "- Import patterns and dependencies\n"
+                user_prompt += "- Code style and structure\n"
+                if self.byoc_file_path:
+                    user_prompt += "- Expert code implementation (if provided)\n"
+                user_prompt += "\n"
+                
+                # Now add the context
+                user_prompt += repo_context + "\n\n"
+                
+                # Add current target files for reference
+                user_prompt += "=" * 80 + "\n"
+                user_prompt += "CURRENT TARGET FILES (for reference)\n"
+                user_prompt += "=" * 80 + "\n\n"
                 for fname, content in file_contents.items():
                     if fname in ["chunk.py", "fused_recurrent.py", "gate.py"]:
                         user_prompt += f"=== {fname} ===\n{content}\n\n"
                 
-                # Add instruction-following emphasis
-                if self.byoc_file_path:
-                    user_prompt += (
-                        "# 🔴 CRITICAL INSTRUCTIONS - READ CAREFULLY:\n"
-                        "# ────────────────────────────────────────────────────────────────────────\n"
-                        "# Expert code has been provided above. You MUST:\n"
-                        "# 1. USE the expert code as your PRIMARY reference\n"
-                        "# 2. FOLLOW the implementation approach shown in expert code\n"
-                        "# 3. ADAPT the expert code structure to match repository conventions\n"
-                        "# 4. DO NOT ignore or deviate from the expert code\n"
-                        "# 5. VERIFY all function signatures match before outputting\n"
-                        "# ────────────────────────────────────────────────────────────────────────\n\n"
-                    )
-                
+                # Final reminder
                 user_prompt += (
-                    "Based on the FULL REPOSITORY CONTEXT above, please rewrite `chunk.py` and `fused_recurrent.py` "
-                    "to use the kernelized gate mechanism from `gate.py`. Remove the pure PyTorch alpha/beta computation.\n\n"
-                    "CRITICAL: Ensure `chunk_quasar` function is exported correctly and matches the expected API from the codebase.\n\n"
-                    "REMEMBER: Follow ALL instructions provided in the context above. Read the MANDATORY INSTRUCTIONS section carefully "
-                    "and verify your output matches all requirements."
+                    "\n" + "=" * 80 + "\n"
+                    "REMINDER: Complete the TASK above using the CONTEXT provided.\n"
+                    "Output your code wrapped in markdown code blocks.\n"
+                    "=" * 80 + "\n"
                 )
             else:
                 # Fallback to minimal context (original behavior)
