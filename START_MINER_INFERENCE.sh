@@ -1,4 +1,6 @@
-
+#!/bin/bash
+# Script to start the Miner Inference Server
+# Run from project root
 
 cd "$(dirname "$0")"
 
@@ -27,7 +29,8 @@ fi
 export MINER_INFERENCE_PORT=${MINER_INFERENCE_PORT:-8001}
 export PORT=$MINER_INFERENCE_PORT
 export HOST=${HOST:-"0.0.0.0"}
-export MODEL_NAME=${REFERENCE_MODEL:-"deepseek-ai/DeepSeek-V3.2"}
+# Use MODEL_NAME from .env, fallback to REFERENCE_MODEL, then default
+export MODEL_NAME=${MODEL_NAME:-${REFERENCE_MODEL:-"Qwen/Qwen3-4B-Instruct-2507"}}
 export DEVICE=${DEVICE:-"cuda"}
 
 echo "Configuration:"

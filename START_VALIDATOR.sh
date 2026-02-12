@@ -35,7 +35,7 @@ export POLLING_INTERVAL=${POLLING_INTERVAL:-300}
 
 # Inference verification settings
 export ENABLE_LOGIT_VERIFICATION=${ENABLE_LOGIT_VERIFICATION:-"true"}
-export REFERENCE_MODEL=${REFERENCE_MODEL:-"deepseek-ai/DeepSeek-V3.2"}
+export REFERENCE_MODEL=${REFERENCE_MODEL:-"Qwen/Qwen3-4B-Instruct-2507"}
 export COSINE_SIM_THRESHOLD=${COSINE_SIM_THRESHOLD:-0.99}
 export MAX_ABS_DIFF_THRESHOLD=${MAX_ABS_DIFF_THRESHOLD:-0.1}
 
@@ -54,6 +54,8 @@ echo "Inference Verification:"
 echo "  Enabled: $ENABLE_LOGIT_VERIFICATION"
 echo "  Reference Model: $REFERENCE_MODEL"
 echo "  Cosine Similarity Threshold: $COSINE_SIM_THRESHOLD"
+echo "  Max Absolute Difference: $MAX_ABS_DIFF_THRESHOLD"
+echo "  Context-Aware: ✅ (builds repository context for consistency)"
 echo ""
 echo "Commit-Reveal:"
 echo "  Blocks Until Reveal: $BLOCKS_UNTIL_REVEAL (~$((BLOCKS_UNTIL_REVEAL * BLOCK_TIME_SECONDS / 60)) minutes)"

@@ -55,7 +55,7 @@ class InferenceVerificationConfig:
     netuid: int = int(os.environ.get("NETUID", 383))
     
     # Reference model (DeepSeek-V3.2 for better code understanding and verification)
-    reference_model: str = os.environ.get("REFERENCE_MODEL", "deepseek-ai/DeepSeek-V3.2")
+    reference_model: str = os.environ.get("REFERENCE_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
     
     # Inference configuration
     prompt_length: int = 128  # Random prompt token length

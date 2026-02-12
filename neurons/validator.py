@@ -498,7 +498,7 @@ class Validator(BaseValidatorNeuron):
         # Reference model for verifying miners are running the actual model
         # ═══════════════════════════════════════════════════════════════════════════
         self.reference_model = None
-        self.reference_model_name = os.getenv("REFERENCE_MODEL", "deepseek-ai/DeepSeek-V3.2")
+        self.reference_model_name = os.getenv("REFERENCE_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
         self.logit_verification_enabled = os.getenv("ENABLE_LOGIT_VERIFICATION", "true").lower() == "true"
         
         # Verification thresholds (from const's implementation)

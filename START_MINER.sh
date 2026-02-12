@@ -35,6 +35,17 @@ export TARGET_SEQUENCE_LENGTH=${TARGET_SEQUENCE_LENGTH:-100000}
 export AGENT_ITERATIONS=${AGENT_ITERATIONS:-100}
 export OPTIMIZATION_INTERVAL=${OPTIMIZATION_INTERVAL:-300}
 
+# Model configuration
+export MINER_MODEL_NAME=${MINER_MODEL_NAME:-"Qwen/Qwen3-4B-Instruct-2507"}
+
+# Context builder configuration (Phase 2: Full Repository Context)
+export USE_FULL_CONTEXT=${USE_FULL_CONTEXT:-"true"}
+export CONTEXT_MAX_FILES=${CONTEXT_MAX_FILES:-50}
+export CONTEXT_MAX_SIZE=${CONTEXT_MAX_SIZE:-200000}
+# Optional: BYOC mode (commented by default)
+# export REPO_PATH=${REPO_PATH:-""}
+# export BYOC_FILE_PATH=${BYOC_FILE_PATH:-""}
+
 # Check required environment variables
 if [ -z "$GITHUB_TOKEN" ]; then
     echo "❌ GITHUB_TOKEN is not set!"
@@ -60,6 +71,20 @@ echo "  Target Seq Length: $TARGET_SEQUENCE_LENGTH"
 echo "  Agent Iterations: $AGENT_ITERATIONS"
 echo "  Optimization Interval: $OPTIMIZATION_INTERVAL seconds"
 echo ""
+echo "Model Configuration:"
+echo "  Model: $MINER_MODEL_NAME"
+echo ""
+echo "Context Builder (Phase 2: Full Repository Context):"
+echo "  Use Full Context: $USE_FULL_CONTEXT"
+echo "  Max Files: $CONTEXT_MAX_FILES"
+echo "  Max Size: $CONTEXT_MAX_SIZE chars (~$((CONTEXT_MAX_SIZE / 4))K tokens)"
+if [ -n "$REPO_PATH" ]; then
+    echo "  Repo Path: $REPO_PATH (BYOC mode)"
+fi
+if [ -n "$BYOC_FILE_PATH" ]; then
+    echo "  BYOC File: $BYOC_FILE_PATH"
+fi
+echo ""
 
 # Check if API is running
 echo "Checking validator API..."
@@ -83,12 +108,32 @@ echo "Starting miner..."
 echo "Press CTRL+C to stop"
 echo ""
 
-python -m neurons.miner \
-    --netuid "$NETUID" \
-    --wallet.name "$WALLET_MINER_NAME" \
-    --wallet.hotkey "$WALLET_HOTKEY" \
-    --subtensor.network "$SUBTENSOR_NETWORK" \
-    --agent-iterations "$AGENT_ITERATIONS" \
-    --target-seq-len "$TARGET_SEQUENCE_LENGTH" \
-    --optimization-interval "$OPTIMIZATION_INTERVAL" \
+# Build command arguments
+MINER_ARGS=(
+    --netuid "$NETUID"
+    --wallet.name "$WALLET_MINER_NAME"
+    --wallet.hotkey "$WALLET_HOTKEY"
+    --subtensor.network "$SUBTENSOR_NETWORK"
+    --agent-iterations "$AGENT_ITERATIONS"
+    --target-seq-len "$TARGET_SEQUENCE_LENGTH"
+    --optimization-interval "$OPTIMIZATION_INTERVAL"
+    --model-name "$MINER_MODEL_NAME"
     --logging.debug
+)
+
+# Add context builder arguments if configured
+if [ "$USE_FULL_CONTEXT" = "true" ]; then
+    MINER_ARGS+=(--use-full-context)
+fi
+MINER_ARGS+=(--context-max-files "$CONTEXT_MAX_FILES")
+MINER_ARGS+=(--context-max-size "$CONTEXT_MAX_SIZE")
+
+# Add BYOC mode arguments if configured
+if [ -n "$REPO_PATH" ]; then
+    MINER_ARGS+=(--repo-path "$REPO_PATH")
+fi
+if [ -n "$BYOC_FILE_PATH" ]; then
+    MINER_ARGS+=(--byoc-file "$BYOC_FILE_PATH")
+fi
+
+python -m neurons.miner "${MINER_ARGS[@]}"

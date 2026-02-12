@@ -86,13 +86,13 @@ class Miner(BaseMinerNeuron):
         
         # Get model name from config, env var, or use default (DeepSeek-V3.2 for better code understanding)
         self.model_name = os.getenv("MINER_MODEL_NAME", 
-            getattr(self.config.miner, 'model_name', "deepseek-ai/DeepSeek-V3.2"))
+            getattr(self.config.miner, 'model_name', "Qwen/Qwen3-4B-Instruct-2507"))
         
         # Estimate model size and adjust parameters (Phase 2: Model-specific config)
         model_size = self._estimate_model_size(self.model_name)
         if model_size < 1.0:  # < 1B
             print(f"[MINER] ⚠️  WARNING: Model {self.model_name} is small (<1B). Consider using larger model (>1B) for better error fixing.")
-            print(f"[MINER] ⚠️  Recommended: deepseek-ai/DeepSeek-V3.2 or set MINER_MODEL_NAME env var", flush=True)
+            print(f"[MINER] ⚠️  Recommended: Qwen/Qwen3-4B-Instruct-2507 or set MINER_MODEL_NAME env var", flush=True)
             self.agent_max_new_tokens = 2048  # Reduce for small models
         elif model_size >= 4.0:  # >= 4B
             self.agent_max_new_tokens = 8192  # Increase for large models
@@ -127,6 +127,14 @@ class Miner(BaseMinerNeuron):
         self.agent_iterations = int(os.getenv("AGENT_ITERATIONS", "100"))
         self.target_sequence_length = int(os.getenv("TARGET_SEQUENCE_LENGTH", "100000"))
         self.optimization_interval = float(os.getenv("OPTIMIZATION_INTERVAL", "300"))  # 5 minutes
+        
+        # Context builder configuration (Phase 2: Full Repository Context)
+        self.repo_path = os.getenv("REPO_PATH", None)  # Optional: local repo path for BYOC mode
+        self.byoc_file_path = os.getenv("BYOC_FILE_PATH", None)  # Optional: expert's optimized code file
+        self.use_full_context = os.getenv("USE_FULL_CONTEXT", "true").lower() == "true"
+        self.context_max_files = int(os.getenv("CONTEXT_MAX_FILES", "50"))
+        self.context_max_size = int(os.getenv("CONTEXT_MAX_SIZE", "200000"))
+        self.repo_hash = None  # Will be calculated during optimization loop
 
     def _estimate_model_size(self, model_name: str) -> float:
         """Estimate model size in billions of parameters (Phase 2)."""

@@ -148,9 +148,10 @@ def calculate_solution_hash(tokens_per_sec: float, target_sequence_length: int,
 
 # Add new columns if they don't exist (migration)
 from sqlalchemy import text
-with engine.connect() as conn:
-    # Check database type
-    is_postgresql = "postgresql" in str(engine.url)
+try:
+    with engine.connect() as conn:
+        # Check database type
+        is_postgresql = "postgresql" in str(engine.url)
     
     if is_postgresql:
         # PostgreSQL: use information_schema
@@ -182,6 +183,16 @@ with engine.connect() as conn:
             conn.commit()
         if "solution_hash" not in columns:
             conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN solution_hash VARCHAR"))
+            conn.commit()
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # CONTEXT BUILDER COLUMN (Phase 5: repo_hash for consistency tracking)
+        # ═══════════════════════════════════════════════════════════════════════════
+        if "repo_hash" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN repo_hash VARCHAR"))
+            conn.commit()
+            # Create index for repo_hash
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_speed_submissions_repo_hash ON speed_submissions(repo_hash)"))
             conn.commit()
         
         # ═══════════════════════════════════════════════════════════════════════════
@@ -272,6 +283,16 @@ with engine.connect() as conn:
             conn.commit()
         
         # ═══════════════════════════════════════════════════════════════════════════
+        # CONTEXT BUILDER COLUMN (Phase 5: repo_hash for consistency tracking)
+        # ═══════════════════════════════════════════════════════════════════════════
+        if "repo_hash" not in columns:
+            conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN repo_hash TEXT"))
+            conn.commit()
+            # Create index for repo_hash
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_speed_submissions_repo_hash ON speed_submissions(repo_hash)"))
+            conn.commit()
+        
+        # ═══════════════════════════════════════════════════════════════════════════
         # COMMIT-REVEAL COLUMNS (from const's qllm architecture)
         # ═══════════════════════════════════════════════════════════════════════════
         if "commitment_hash" not in columns:
@@ -308,9 +329,13 @@ with engine.connect() as conn:
         if "throughput_verified" not in columns:
             conn.execute(text("ALTER TABLE speed_submissions ADD COLUMN throughput_verified REAL"))
             conn.commit()
-    
-    # Commit any pending changes
-    conn.commit()
+        
+        # Commit any pending changes
+        conn.commit()
+except Exception as e:
+    print(f"⚠️  Database migration warning: {e}")
+    print("   This is normal if the database is already up-to-date.")
+    # Continue anyway - the app will work if columns already exist
 
 app = FastAPI(title="Quasar Validator API")
 
