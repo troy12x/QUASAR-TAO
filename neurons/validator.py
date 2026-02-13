@@ -36,8 +36,18 @@ VALIDATOR_API_URL = os.getenv("VALIDATOR_API_URL", "https://quasar-validator-api
 class PerformanceValidator:
     """Validates miner performance claims by cloning repos and running tests."""
 
-    # Required imports that must be present
-    REQUIRED_IMPORTS = [
+    # Required imports that must be present in chunk.py (critical for validation)
+    # These are the imports that validators check - missing any will cause score 0.0
+    REQUIRED_IMPORTS_CHUNK_PY = [
+        "from fla.utils import autocast_custom_bwd",
+        "from fla.utils import autocast_custom_fwd",
+        "from fla.utils import autotune_cache_kwargs",
+        "from fla.utils import check_shared_mem",
+        "from fla.utils import input_guard",
+    ]
+    
+    # Optional imports that are typically present but not strictly required
+    OPTIONAL_IMPORTS = [
         "import torch",
         "import torch.nn.functional as F",
         "import triton",
@@ -45,11 +55,6 @@ class PerformanceValidator:
         "from fla.ops.utils.index import prepare_chunk_indices",
         "from fla.ops.quasar.forward_substitution import forward_substitution_kernel",
         "from fla.utils import IS_AMD",
-        "from fla.utils import autocast_custom_bwd",
-        "from fla.utils import autocast_custom_fwd",
-        "from fla.utils import autotune_cache_kwargs",
-        "from fla.utils import check_shared_mem",
-        "from fla.utils import input_guard",
     ]
 
     # Forbidden imports that must NOT be present
@@ -86,10 +91,81 @@ class PerformanceValidator:
                 if forbidden in content:
                     errors.append(f"{filename}: Forbidden import found: {forbidden}")
 
-            # Check for required imports (only for main files like chunk.py)
+            # Check for required imports (only for chunk.py - these are CRITICAL)
             if filename == "chunk.py":
-                for required in self.REQUIRED_IMPORTS:
-                    if required not in content:
+                for required in self.REQUIRED_IMPORTS_CHUNK_PY:
+                    # Extract the import name (e.g., "autocast_custom_bwd" from "from fla.utils import autocast_custom_bwd")
+                    import_name = required.split("import")[-1].strip()
+                    found = False
+                    
+                    # Normalize content for comparison (remove comments, normalize whitespace)
+                    normalized_content = content
+                    # Remove single-line comments
+                    lines = normalized_content.split('\n')
+                    cleaned_lines = []
+                    for line in lines:
+                        # Remove comments but keep the line structure
+                        if '#' in line:
+                            comment_pos = line.find('#')
+                            # Check if # is in a string
+                            if line[:comment_pos].count('"') % 2 == 0 and line[:comment_pos].count("'") % 2 == 0:
+                                line = line[:comment_pos]
+                        cleaned_lines.append(line)
+                    normalized_content = '\n'.join(cleaned_lines)
+                    
+                    # Check exact match first
+                    if required in normalized_content:
+                        found = True
+                    # Check case-insensitive match
+                    elif required.lower() in normalized_content.lower():
+                        found = True
+                    # Check for multi-line imports: from fla.utils import (\n    autocast_custom_bwd,\n    ...)
+                    elif f"from fla.utils import" in normalized_content.lower():
+                        # Find all import lines and continuation lines
+                        import_blocks = []
+                        lines = normalized_content.split('\n')
+                        in_import_block = False
+                        current_block = []
+                        
+                        for i, line in enumerate(lines):
+                            line_lower = line.lower().strip()
+                            if 'from fla.utils import' in line_lower:
+                                in_import_block = True
+                                current_block = [line]
+                                # Check if it's a single-line import
+                                if ')' not in line and '(' not in line:
+                                    import_blocks.append(line)
+                                    in_import_block = False
+                                    current_block = []
+                            elif in_import_block:
+                                current_block.append(line)
+                                if ')' in line or (line.strip().endswith(',') and i < len(lines) - 1 and 'from' in lines[i+1].lower()):
+                                    import_blocks.append('\n'.join(current_block))
+                                    in_import_block = False
+                                    current_block = []
+                        
+                        # Check if import_name appears in any import block
+                        for block in import_blocks:
+                            if import_name.lower() in block.lower():
+                                found = True
+                                break
+                    
+                    # Final check: simple string search for the import name near "from fla.utils"
+                    if not found:
+                        # Look for the import name anywhere in the file (as a fallback)
+                        # This handles cases where imports might be reformatted
+                        import_patterns = [
+                            f"from fla.utils import {import_name}",
+                            f"from fla.utils import ({import_name}",
+                            f"{import_name},",
+                            f"{import_name})",
+                        ]
+                        for pattern in import_patterns:
+                            if pattern.lower() in normalized_content.lower():
+                                found = True
+                                break
+                    
+                    if not found:
                         errors.append(f"{filename}: Missing required import: {required}")
 
         return len(errors) == 0, errors

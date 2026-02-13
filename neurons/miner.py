@@ -1414,20 +1414,52 @@ class Miner(BaseMinerNeuron):
             print(f"[MINER] Error: {e}", flush=True)
             raise
 
-    async def forward(self, synapse: quasar.protocol.BenchmarkEvaluationSynapse) -> quasar.protocol.BenchmarkEvaluationSynapse:
-        """Not used - miner runs optimization loop."""
-        synapse.response = "Miner runs optimization loop. Please use validator_api."
+    async def forward(self, synapse: bt.Synapse) -> bt.Synapse:
+        """
+        Handle incoming synapse requests.
+        
+        This miner primarily runs an optimization loop and submits via validator_api.
+        However, it can still receive BenchmarkEvaluationSynapse requests from validators.
+        Unknown synapse types are gracefully rejected.
+        """
+        # Handle BenchmarkEvaluationSynapse if provided
+        if isinstance(synapse, quasar.protocol.BenchmarkEvaluationSynapse):
+            synapse.response = "Miner runs optimization loop. Please use validator_api."
+            synapse.processing_time = 0.0
+            return synapse
+        
+        # Reject unknown synapse types gracefully
+        # This prevents UnknownSynapseError when validators send unsupported synapse types
+        bt.logging.warning(
+            f"Received unsupported synapse type: {type(synapse).__name__}. "
+            f"This miner only supports BenchmarkEvaluationSynapse. "
+            f"Please use validator_api for submissions."
+        )
+        synapse.response = f"Unsupported synapse type: {type(synapse).__name__}. This miner uses validator_api."
         synapse.processing_time = 0.0
         return synapse
 
-    async def blacklist(self, synapse: quasar.protocol.BenchmarkEvaluationSynapse) -> typing.Tuple[bool, str]:
+    async def blacklist(self, synapse: bt.Synapse) -> typing.Tuple[bool, str]:
+        """Blacklist function that works with any synapse type."""
+        # Only accept BenchmarkEvaluationSynapse
+        if not isinstance(synapse, quasar.protocol.BenchmarkEvaluationSynapse):
+            return True, f"Unsupported synapse type: {type(synapse).__name__}"
+        
         if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
             return True, "Unrecognized hotkey"
         return False, "Hotkey recognized!"
 
-    async def priority(self, synapse: quasar.protocol.BenchmarkEvaluationSynapse) -> float:
-        caller_uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
-        return float(self.metagraph.S[caller_uid])
+    async def priority(self, synapse: bt.Synapse) -> float:
+        """Priority function that works with any synapse type."""
+        # Only prioritize BenchmarkEvaluationSynapse
+        if not isinstance(synapse, quasar.protocol.BenchmarkEvaluationSynapse):
+            return 0.0
+        
+        try:
+            caller_uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
+            return float(self.metagraph.S[caller_uid])
+        except (ValueError, AttributeError):
+            return 0.0
 
 if __name__ == "__main__":
     import argparse
