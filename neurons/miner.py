@@ -908,9 +908,16 @@ class Miner(BaseMinerNeuron):
                 "```\n\n"
                 "CRITICAL RULES:\n"
                 "- Match function signatures exactly from the codebase\n"
-                "- Keep existing imports - don't add new ones\n"
                 "- Export chunk_quasar function correctly\n"
-                "- Follow code style from repository files\n"
+                "- Follow code style from repository files\n\n"
+                "REQUIRED IMPORTS (MUST INCLUDE):\n"
+                "You MUST include these imports from fla.utils:\n"
+                "  from fla.utils import autocast_custom_bwd\n"
+                "  from fla.utils import autocast_custom_fwd\n"
+                "  from fla.utils import autotune_cache_kwargs\n"
+                "  from fla.utils import check_shared_mem\n"
+                "  from fla.utils import input_guard\n"
+                "These imports are MANDATORY - validator will reject code without them.\n"
             )
 
             # Build user prompt with TASK FIRST, then context
@@ -935,8 +942,16 @@ class Miner(BaseMinerNeuron):
                     "2. Remove pure PyTorch alpha/beta computation\n"
                     "3. Export chunk_quasar function correctly (check __init__.py in context)\n"
                     "4. Match function signatures from the codebase\n"
-                    "5. Keep all existing imports\n"
+                    "5. Include ALL required imports from fla.utils (see MANDATORY IMPORTS below)\n"
                     "6. Follow code patterns from repository files\n\n"
+                    "🔴 MANDATORY IMPORTS (VALIDATOR WILL REJECT WITHOUT THESE):\n"
+                    "You MUST include these exact imports in chunk.py:\n"
+                    "  from fla.utils import autocast_custom_bwd\n"
+                    "  from fla.utils import autocast_custom_fwd\n"
+                    "  from fla.utils import autotune_cache_kwargs\n"
+                    "  from fla.utils import check_shared_mem\n"
+                    "  from fla.utils import input_guard\n"
+                    "⚠️  Missing any of these imports will cause validation to fail with score 0.0\n\n"
                 )
                 
                 user_prompt += "=" * 80 + "\n"
@@ -964,7 +979,15 @@ class Miner(BaseMinerNeuron):
                 # Final reminder
                 user_prompt += (
                     "\n" + "=" * 80 + "\n"
-                    "REMINDER: Complete the TASK above using the CONTEXT provided.\n"
+                    "FINAL CHECKLIST BEFORE OUTPUTTING CODE:\n"
+                    "=" * 80 + "\n"
+                    "□ All MANDATORY IMPORTS are included (autocast_custom_bwd, autocast_custom_fwd, etc.)\n"
+                    "□ chunk_quasar function is exported correctly\n"
+                    "□ Function signatures match codebase\n"
+                    "□ Code follows repository patterns\n"
+                    "□ Tests will pass\n"
+                    "\n"
+                    "REMINDER: Missing required imports will cause validator to reject with score 0.0\n"
                     "Output your code wrapped in markdown code blocks.\n"
                     "=" * 80 + "\n"
                 )

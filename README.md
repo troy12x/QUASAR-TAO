@@ -11,7 +11,7 @@
 
 ---
 
-- [Overview](#overview)
+  - [Overview](#overview)
 - [Architecture](#architecture)
   - [Validator API](#validator-api)
   - [Miner Neuron](#miner-neuron)
