@@ -65,9 +65,17 @@ class PerformanceValidator:
         "import fla.ops.kda",
     ]
 
-    def __init__(self):
+    def __init__(self, validator_instance=None):
+        """
+        Initialize PerformanceValidator.
+        
+        Args:
+            validator_instance: Optional reference to the main Validator instance
+                               for accessing logit verification methods.
+        """
         self.validator_api_url = VALIDATOR_API_URL
         self.temp_dir = tempfile.mkdtemp(prefix="quasar_validator_")
+        self.validator_instance = validator_instance  # Reference to main Validator for logit verification
         print(f"[VALIDATOR] Initialized with temp dir: {self.temp_dir}")
 
     def validate_imports(self, repo_path: str) -> tuple[bool, List[str]]:
@@ -468,40 +476,42 @@ if __name__ == "__main__":
                 print(f"  {seq_len}: claimed={claimed:.2f}, actual={actual:.2f}, diff={diff:.2f}%")
 
             # Run logit verification (before cleanup, so we can use repo_path)
+            # Note: Logit verification is handled by the main Validator class, not PerformanceValidator
             verification_result = None
-            if self.logit_verification_enabled:
-                try:
-                    verification_result = self.run_logit_verification(
-                        submission_id=submission.get("id"),
-                        docker_image=None,  # Will be set when container execution is available
-                        repo_path=repo_path,
-                        fork_url=fork_url,
-                        commit_hash=commit_hash
-                    )
-                    
-                    # Verify repo_hash consistency if provided
-                    if repo_hash and verification_result.get("repo_hash"):
-                        validator_repo_hash = verification_result.get("repo_hash")
-                        if repo_hash != validator_repo_hash:
-                            print(f"[VALIDATOR] ⚠️  Repo hash mismatch! Miner: {repo_hash}, Validator: {validator_repo_hash}", flush=True)
-                            verification_result["repo_hash_match"] = False
-                            verification_result["reason"] = f"Repo hash mismatch: miner={repo_hash}, validator={validator_repo_hash}"
-                        else:
-                            print(f"[VALIDATOR] ✅ Repo hash matches: {repo_hash}", flush=True)
-                            verification_result["repo_hash_match"] = True
-                    elif repo_hash:
-                        print(f"[VALIDATOR] ⚠️  Miner provided repo_hash but validator couldn't build context", flush=True)
-                        verification_result["repo_hash_match"] = None
-                    else:
-                        verification_result["repo_hash_match"] = None  # No hash provided
+            if self.validator_instance and hasattr(self.validator_instance, 'logit_verification_enabled'):
+                if self.validator_instance.logit_verification_enabled:
+                    try:
+                        verification_result = self.validator_instance.run_logit_verification(
+                            submission_id=submission.get("id"),
+                            docker_image=None,  # Will be set when container execution is available
+                            repo_path=repo_path,
+                            fork_url=fork_url,
+                            commit_hash=commit_hash
+                        )
                         
-                except Exception as e:
-                    print(f"[VALIDATOR] ⚠️  Logit verification failed: {e}", flush=True)
-                    verification_result = {
-                        "verified": None,
-                        "reason": f"Verification error: {str(e)}",
-                        "repo_hash_match": None
-                    }
+                        # Verify repo_hash consistency if provided
+                        if repo_hash and verification_result.get("repo_hash"):
+                            validator_repo_hash = verification_result.get("repo_hash")
+                            if repo_hash != validator_repo_hash:
+                                print(f"[VALIDATOR] ⚠️  Repo hash mismatch! Miner: {repo_hash}, Validator: {validator_repo_hash}", flush=True)
+                                verification_result["repo_hash_match"] = False
+                                verification_result["reason"] = f"Repo hash mismatch: miner={repo_hash}, validator={validator_repo_hash}"
+                            else:
+                                print(f"[VALIDATOR] ✅ Repo hash matches: {repo_hash}", flush=True)
+                                verification_result["repo_hash_match"] = True
+                        elif repo_hash:
+                            print(f"[VALIDATOR] ⚠️  Miner provided repo_hash but validator couldn't build context", flush=True)
+                            verification_result["repo_hash_match"] = None
+                        else:
+                            verification_result["repo_hash_match"] = None  # No hash provided
+                            
+                    except Exception as e:
+                        print(f"[VALIDATOR] ⚠️  Logit verification failed: {e}", flush=True)
+                        verification_result = {
+                            "verified": None,
+                            "reason": f"Verification error: {str(e)}",
+                            "repo_hash_match": None
+                        }
 
             # Clean up
             if os.path.exists(repo_path):
@@ -566,7 +576,8 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info(f"⏱️ Polling interval: {polling_interval}s ({polling_interval/60:.1f} minutes)")
         
         # Initialize PerformanceValidator for speed optimization validation
-        self.performance_validator = PerformanceValidator()
+        # Pass self reference so PerformanceValidator can access logit verification methods
+        self.performance_validator = PerformanceValidator(validator_instance=self)
         bt.logging.info("⚡ Performance validator initialized")
         
         # ═══════════════════════════════════════════════════════════════════════════
