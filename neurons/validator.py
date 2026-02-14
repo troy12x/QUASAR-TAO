@@ -620,12 +620,48 @@ class Validator(BaseValidatorNeuron):
             
             self.reference_model = ReferenceModel(self.reference_model_name)
             
-            # Load synchronously (blocking)
+            # Load the model - handle both sync and async contexts
             import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.reference_model.load())
-            loop.close()
+            try:
+                # Try to get the running event loop
+                asyncio.get_running_loop()
+                # If we're in an async context, schedule the coroutine
+                # Use a thread-safe method to run it
+                import concurrent.futures
+                import threading
+                
+                # Create a future to wait for the result
+                future = concurrent.futures.Future()
+                
+                def run_in_thread():
+                    """Run the async load in a separate thread with its own event loop."""
+                    try:
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        new_loop.run_until_complete(self.reference_model.load())
+                        new_loop.close()
+                        future.set_result(True)
+                    except Exception as e:
+                        future.set_exception(e)
+                
+                # Run in a separate thread to avoid event loop conflict
+                thread = threading.Thread(target=run_in_thread, daemon=True)
+                thread.start()
+                thread.join(timeout=300)  # 5 minute timeout
+                
+                if thread.is_alive():
+                    raise TimeoutError("Model loading timed out after 5 minutes")
+                
+                # Check if there was an exception
+                if future.exception():
+                    raise future.exception()
+                    
+            except RuntimeError:
+                # No running event loop, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.reference_model.load())
+                loop.close()
             
             print(f"[VALIDATOR] ✅ Reference model loaded successfully", flush=True)
             bt.logging.success("Reference model loaded successfully")
@@ -769,13 +805,49 @@ class Validator(BaseValidatorNeuron):
             
             print(f"[VALIDATOR]   Challenge: prompt_len={len(prompt)}, gen_len={gen_len}, capture_step={logits_at_step}", flush=True)
             
-            # Run reference model inference
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            reference_result = loop.run_until_complete(
-                self.reference_model.inference(prompt, gen_len, logits_at_step)
-            )
-            loop.close()
+            # Run reference model inference - handle event loop conflicts
+            try:
+                # Try to get the running event loop
+                asyncio.get_running_loop()
+                # If we're in an async context, we need to run in a separate thread
+                import concurrent.futures
+                import threading
+                
+                future = concurrent.futures.Future()
+                
+                def run_inference():
+                    """Run inference in a separate thread with its own event loop."""
+                    try:
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        result = new_loop.run_until_complete(
+                            self.reference_model.inference(prompt, gen_len, logits_at_step)
+                        )
+                        new_loop.close()
+                        future.set_result(result)
+                    except Exception as e:
+                        future.set_exception(e)
+                
+                thread = threading.Thread(target=run_inference, daemon=True)
+                thread.start()
+                thread.join(timeout=300)  # 5 minute timeout
+                
+                if thread.is_alive():
+                    raise TimeoutError("Inference timed out after 5 minutes")
+                
+                if future.exception():
+                    raise future.exception()
+                
+                reference_result = future.result()
+                
+            except RuntimeError:
+                # No running event loop, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                reference_result = loop.run_until_complete(
+                    self.reference_model.inference(prompt, gen_len, logits_at_step)
+                )
+                loop.close()
             
             if reference_result.get("captured_logits") is None:
                 return {
