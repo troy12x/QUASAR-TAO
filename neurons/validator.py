@@ -635,7 +635,14 @@ class Validator(BaseValidatorNeuron):
             bt.logging.warning(f"Failed to load reference model: {e}")
             self.reference_model = None
     
-    def run_logit_verification(self, submission_id: int, docker_image: str = None) -> Dict:
+    def run_logit_verification(
+        self, 
+        submission_id: int, 
+        docker_image: str = None,
+        repo_path: str = None,
+        fork_url: str = None,
+        commit_hash: str = None
+    ) -> Dict:
         """
         Run logit verification for a submission.
         
@@ -721,8 +728,9 @@ class Validator(BaseValidatorNeuron):
                 # Clone repo if not provided
                 try:
                     print(f"[VALIDATOR]   Cloning repository for context building...", flush=True)
-                    cloned_repo_path = self.clone_miner_repo(fork_url)
-                    self.checkout_commit(cloned_repo_path, commit_hash)
+                    # Use performance_validator's clone method
+                    cloned_repo_path = self.performance_validator.clone_miner_repo(fork_url)
+                    self.performance_validator.checkout_commit(cloned_repo_path, commit_hash)
                     
                     repo_context = build_full_context(
                         repo_path=cloned_repo_path,
@@ -873,6 +881,9 @@ class Validator(BaseValidatorNeuron):
                     if self.logit_verification_enabled and submission_id:
                         print(f"[VALIDATOR] 🔍 Running logit verification...", flush=True)
                         docker_image = submission.get("docker_image")
+                        # Get fork_url and commit_hash from submission or result
+                        fork_url = submission.get("fork_url") or result.get("fork_url")
+                        commit_hash = submission.get("commit_hash") or result.get("commit_hash")
                         # Note: repo_path is not available here (already cleaned up)
                         # Context will be built from fork_url + commit_hash
                         verification_result = self.run_logit_verification(
