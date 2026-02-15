@@ -475,43 +475,10 @@ if __name__ == "__main__":
                 diff = (actual - claimed) / claimed * 100 if claimed > 0 else 0
                 print(f"  {seq_len}: claimed={claimed:.2f}, actual={actual:.2f}, diff={diff:.2f}%")
 
-            # Run logit verification (before cleanup, so we can use repo_path)
-            # Note: Logit verification is handled by the main Validator class, not PerformanceValidator
+            # Note: Logit verification is now handled in evaluate_performance_submissions()
+            # after performance validation passes, to avoid duplicate calls and ensure
+            # we have the submission result before running verification
             verification_result = None
-            if self.validator_instance and hasattr(self.validator_instance, 'logit_verification_enabled'):
-                if self.validator_instance.logit_verification_enabled:
-                    try:
-                        verification_result = self.validator_instance.run_logit_verification(
-                            submission_id=submission.get("id"),
-                            docker_image=None,  # Will be set when container execution is available
-                            repo_path=repo_path,
-                            fork_url=fork_url,
-                            commit_hash=commit_hash
-                        )
-                        
-                        # Verify repo_hash consistency if provided
-                        if repo_hash and verification_result.get("repo_hash"):
-                            validator_repo_hash = verification_result.get("repo_hash")
-                            if repo_hash != validator_repo_hash:
-                                print(f"[VALIDATOR] ⚠️  Repo hash mismatch! Miner: {repo_hash}, Validator: {validator_repo_hash}", flush=True)
-                                verification_result["repo_hash_match"] = False
-                                verification_result["reason"] = f"Repo hash mismatch: miner={repo_hash}, validator={validator_repo_hash}"
-                            else:
-                                print(f"[VALIDATOR] ✅ Repo hash matches: {repo_hash}", flush=True)
-                                verification_result["repo_hash_match"] = True
-                        elif repo_hash:
-                            print(f"[VALIDATOR] ⚠️  Miner provided repo_hash but validator couldn't build context", flush=True)
-                            verification_result["repo_hash_match"] = None
-                        else:
-                            verification_result["repo_hash_match"] = None  # No hash provided
-                            
-                    except Exception as e:
-                        print(f"[VALIDATOR] ⚠️  Logit verification failed: {e}", flush=True)
-                        verification_result = {
-                            "verified": None,
-                            "reason": f"Verification error: {str(e)}",
-                            "repo_hash_match": None
-                        }
 
             # Clean up
             if os.path.exists(repo_path):
@@ -871,7 +838,8 @@ class Validator(BaseValidatorNeuron):
                 "verified": None,  # None = pending (container execution not available)
                 "reason": "Container execution not available - awaiting affinetes integration",
                 "reference_throughput": gen_len / reference_result["elapsed_sec"],
-                "reference_elapsed_sec": reference_result["elapsed_sec"]
+                "reference_elapsed_sec": reference_result["elapsed_sec"],
+                "repo_hash": repo_hash  # Include repo_hash for consistency checking
             }
             
         except Exception as e:
@@ -880,28 +848,45 @@ class Validator(BaseValidatorNeuron):
             return {
                 "verified": None,
                 "reason": f"Verification error: {str(e)}",
-                "context_used": False
+                "context_used": False,
+                "repo_hash": repo_hash if 'repo_hash' in locals() else None
             }
     
     def record_verification_result(self, submission_id: int, result: Dict):
         """Record logit verification result to the API."""
         try:
+            # API expects verified to be bool, not None
+            verified = result.get("verified")
+            if verified is None:
+                # Skip recording if verification wasn't performed
+                print(f"[VALIDATOR] ⚠️ Skipping verification record - verification not performed (verified=None)", flush=True)
+                return
+            
+            # Build params dict, only including non-None values
+            params = {
+                "submission_id": submission_id,
+                "verified": bool(verified),  # Ensure it's a bool
+            }
+            
+            # Add optional fields only if they exist
+            if result.get("cosine_similarity") is not None:
+                params["cosine_similarity"] = result.get("cosine_similarity")
+            if result.get("max_abs_diff") is not None:
+                params["max_abs_diff"] = result.get("max_abs_diff")
+            if result.get("throughput_verified") is not None or result.get("reference_throughput") is not None:
+                params["throughput"] = result.get("throughput_verified") or result.get("reference_throughput")
+            if result.get("reason"):
+                params["reason"] = result.get("reason")
+            
             response = requests.post(
                 f"{VALIDATOR_API_URL}/record_verification",
-                params={
-                    "submission_id": submission_id,
-                    "verified": result.get("verified"),
-                    "cosine_similarity": result.get("cosine_similarity"),
-                    "max_abs_diff": result.get("max_abs_diff"),
-                    "throughput": result.get("throughput_verified") or result.get("reference_throughput"),
-                    "reason": result.get("reason")
-                },
+                params=params,
                 timeout=30
             )
             if response.status_code == 200:
                 print(f"[VALIDATOR] ✅ Verification result recorded for submission {submission_id}", flush=True)
             else:
-                print(f"[VALIDATOR] ⚠️ Failed to record verification: {response.status_code}", flush=True)
+                print(f"[VALIDATOR] ⚠️ Failed to record verification: {response.status_code} - {response.text}", flush=True)
         except Exception as e:
             print(f"[VALIDATOR] ⚠️ Failed to record verification result: {e}", flush=True)
 
